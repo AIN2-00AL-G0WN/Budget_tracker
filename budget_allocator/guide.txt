@@ -1,0 +1,70 @@
+Budget Allocator & Tracker - Backend Guide
+==========================================
+
+This tool is a secure, internal FastAPI backend designed to replace manual Excel-based budget tracking. It uses a hybrid architecture where math is hardcoded in Python for safety, but multipliers are stored in PostgreSQL for flexibility.
+
+Prerequisites
+-------------
+1. Python 3.10+
+2. PostgreSQL Database
+3. Virtual Environment (recommended)
+
+Step 1: Setup Environment
+-------------------------
+Navigate to the project root:
+$ cd budget_allocator
+
+Create and activate a virtual environment:
+$ python -m venv venv
+$ .\venv\Scripts\activate   # Windows
+$ source venv/bin/activate  # Linux/Mac
+
+Install dependencies:
+$ pip install -r requirements.txt
+
+Step 2: Configuration
+---------------------
+1. Copy the example environment file:
+   $ copy .env.example .env
+
+2. Edit `.env` and provide your PostgreSQL credentials and a secure `SECRET_KEY`.
+   Example full `DATABASE_URL` format:
+   postgresql+asyncpg://postgres:password@localhost:5432/budget_tracker
+
+Step 3: Database Migrations (Alembic)
+--------------------------------------
+Initialize the database schema:
+
+1. Initialize Alembic:
+   $ alembic init alembic
+
+2. Configure `alembic/env.py`:
+   - Import the `Base` from `app.core.database`.
+   - Set `target_metadata = Base.metadata`.
+   - Ensure the database URL in `alembic.ini` is updated or dynamically loaded in `env.py`.
+
+3. Generate and apply migrations:
+   $ alembic revision --autogenerate -m "initial_schema"
+   $ alembic upgrade head
+
+Step 4: Seed Rate Cards
+-----------------------
+The calculation engine requires default multipliers to function. Run the seeder:
+$ python -m scripts.seed_rate_cards
+
+Step 5: Run the Application
+---------------------------
+Start the FastAPI server with Uvicorn:
+$ uvicorn app.main:app --reload
+
+Access documentation:
+- Swagger UI: http://127.0.0.1:8000/docs
+- ReDoc: http://127.0.0.1:8000/redoc
+
+Core Architectures Implemented
+------------------------------
+- Async Database I/O: All DB operations use SQLAlchemy 2.0 Async.
+- Hybrid Calculation: `app/services/calculation_service.py` contains the hardcoded Excel formulas.
+- Automatic Audit: SQLAlchemy listeners in `app/services/audit_logger.py` track every change to Projects, Budgets, and Rate Cards.
+- Offline Security: TOTP (MFA) and single-use Admin-generated setup links for onboarding.
+- Internal Scheduling: APScheduler runs inside the web process at midnight to check for upcoming deadlines.
