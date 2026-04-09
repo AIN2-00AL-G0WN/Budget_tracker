@@ -40,6 +40,7 @@ from app.models.models import (
     RateCard,
     SubDivision,
 )
+from app.core.context import current_user_id   # Fix #10: request-scoped actor ID
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def _write_audit_row(
         action=action,
         old_value=old_value,
         new_value=new_value,
-        user_id=None,   # populated by middleware/context var in a future iteration
+        user_id=current_user_id.get(),   # Fix #10: populated from request context
     )
     # Use the same session but avoid re-triggering the listener by adding
     # directly to the identity map without going through the unit-of-work.

@@ -181,7 +181,10 @@ class ProjectOut(_Base):
 # ===========================================================================
 
 class SubDivisionCreate(BaseModel):
-    project_id: uuid.UUID
+    """
+    ``project_id`` is intentionally absent — it is taken from the URL path
+    parameter in the router to avoid body/path discrepancies (Fix #7).
+    """
     name: str = Field(..., min_length=2, max_length=256)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
@@ -259,15 +262,48 @@ class BudgetOut(_Base):
 # Rate Card schemas
 # ===========================================================================
 
+# Keys whose value is used as a divisor in calculation_service.py.  Zero
+# is never valid for these — it would cause a guaranteed ZeroDivisionError
+# on every subsequent budget calculation (Fix #4).
+_DIVISOR_RATE_KEYS: frozenset[str] = frozenset({
+    "working_days_per_week",
+    "manual_hc_divisor",
+    "automation_hc_divisor",
+})
+
+
 class RateCardCreate(BaseModel):
     key_name: str = Field(..., min_length=2, max_length=128)
     value: float = Field(..., description="The numeric multiplier or rate value")
     description: Optional[str] = Field(default=None, max_length=512)
 
+    @model_validator(mode="after")
+    def _reject_zero_divisor(self) -> "RateCardCreate":
+        if self.key_name in _DIVISOR_RATE_KEYS and self.value == 0:
+            raise ValueError(
+                f"'{self.key_name}' is used as a divisor in budget calculations "
+                "and cannot be zero."
+            )
+        return self
+
 
 class RateCardUpdate(BaseModel):
-    value: float
+    key_name: Optional[str] = Field(default=None, min_length=2, max_length=128)
+    value: Optional[float] = None
     description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _reject_zero_divisor(self) -> "RateCardUpdate":
+        if (
+            self.key_name in _DIVISOR_RATE_KEYS
+            and self.value is not None
+            and self.value == 0
+        ):
+            raise ValueError(
+                f"'{self.key_name}' is used as a divisor in budget calculations "
+                "and cannot be zero."
+            )
+        return self
 
 
 class RateCardOut(_Base):

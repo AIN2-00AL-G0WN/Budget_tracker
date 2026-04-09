@@ -523,6 +523,47 @@ class AuditLog(Base):
 
 
 # ===========================================================================
+# Consumed TOTP Codes  (replay-attack prevention)
+# ===========================================================================
+
+class ConsumedTOTPCode(Base):
+    """
+    Short-lived record of every TOTP code that has been successfully verified.
+
+    Before accepting a login with a TOTP code, the auth layer checks this
+    table.  If the code is found (and not yet expired) the login is rejected
+    as a replay attack.
+
+    Rows are pruned opportunistically at login time by ``crud_totp.purge_expired_codes``.
+    The ``expires_at`` index makes the cleanup query efficient.
+    """
+
+    __tablename__ = "consumed_totp_codes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    code: Mapped[str] = mapped_column(String(6), nullable=False)
+    consumed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,   # Fast cleanup and lookup by expiry
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<ConsumedTOTPCode user={self.user_id!s:.8} code={self.code}>"
+
+
+# ===========================================================================
 # Notifications
 # ===========================================================================
 

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import decode_token, verify_token_kind
+from app.core.context import current_user_id   # Fix #10
 from app.models.models import User
 
 bearer_scheme = HTTPBearer(auto_error=True)
@@ -68,6 +69,9 @@ async def _get_user_from_token(
             detail="Token has been invalidated. Please log in again.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Fix #10: Populate the request-scoped context var so audit_logger can
+    # record who performed the action without needing an HTTP request reference.
+    current_user_id.set(user.id)
     return user
 
 

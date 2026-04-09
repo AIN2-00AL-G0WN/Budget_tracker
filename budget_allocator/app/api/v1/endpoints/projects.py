@@ -1,18 +1,25 @@
 """
 app/api/v1/endpoints/projects.py
 ---------------------------------
-Project and SubDivision CRUD endpoints.
+HTTP Controller for Project and SubDivision resources.
 
+This router is intentionally thin:  it validates schemas via Pydantic,
+delegates ALL database operations to ``app.crud.crud_project``, raises the
+appropriate HTTP exceptions when the CRUD layer signals a missing or conflicting
+resource, and serialises the response.
+
+Route summary
+~~~~~~~~~~~~~
   GET    /projects                       — list all projects
-  POST   /projects                       — create project
+  POST   /projects                       — create project  [admin]
   GET    /projects/{id}                  — get project detail (with sub-divisions)
-  PATCH  /projects/{id}                  — update project
-  DELETE /projects/{id}                  — delete project
+  PATCH  /projects/{id}                  — update project  [admin]
+  DELETE /projects/{id}                  — delete project  [admin]
 
   GET    /projects/{id}/subdivisions     — list sub-divisions for a project
-  POST   /projects/{id}/subdivisions     — create sub-division
-  PATCH  /subdivisions/{id}              — update sub-division
-  DELETE /subdivisions/{id}              — delete sub-division
+  POST   /projects/{id}/subdivisions     — create sub-division  [admin]
+  PATCH  /projects/subdivisions/{id}     — update sub-division  [admin]
+  DELETE /projects/subdivisions/{id}     — delete sub-division  [admin]
 """
 
 from __future__ import annotations
@@ -21,13 +28,11 @@ import uuid
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.dependencies.auth import get_current_admin_user, get_current_user
 from app.core.database import get_db
-from app.models.models import Project, SubDivision, User
+from app.crud import crud_project
+from app.models.models import User
 from app.schemas.schemas import (
     ProjectCreate,
     ProjectOut,
@@ -36,6 +41,7 @@ from app.schemas.schemas import (
     SubDivisionOut,
     SubDivisionUpdate,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 logger = logging.getLogger(__name__)
@@ -45,13 +51,13 @@ logger = logging.getLogger(__name__)
 # Projects
 # ===========================================================================
 
+
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProjectOut]:
-    result = await db.execute(select(Project).order_by(Project.created_at))
-    return result.scalars().all()  # type: ignore[return-value]
+    return await crud_project.get_all_projects(db)  # type: ignore[return-value]
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -60,9 +66,7 @@ async def create_project(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProjectOut:
-    project = Project(**payload.model_dump())
-    db.add(project)
-    await db.flush()
+    project = await crud_project.create_project(db, payload)
     logger.info("Project created: %s (%s)", project.name, project.id)
     return project  # type: ignore[return-value]
 
@@ -73,12 +77,7 @@ async def get_project(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProjectOut:
-    result = await db.execute(
-        select(Project)
-        .where(Project.id == project_id)
-        .options(selectinload(Project.sub_divisions))
-    )
-    project = result.scalar_one_or_none()
+    project = await crud_project.get_project_by_id(db, project_id, load_subdivisions=True)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     return project  # type: ignore[return-value]
@@ -91,14 +90,10 @@ async def update_project(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProjectOut:
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
+    project = await crud_project.get_project_by_id(db, project_id)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-    for field, val in payload.model_dump(exclude_none=True).items():
-        setattr(project, field, val)
-    db.add(project)
+    project = await crud_project.update_project(db, project, payload)
     return project  # type: ignore[return-value]
 
 
@@ -108,16 +103,16 @@ async def delete_project(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
+    project = await crud_project.get_project_by_id(db, project_id)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    await db.delete(project)
+    await crud_project.delete_project(db, project)
 
 
 # ===========================================================================
 # SubDivisions (nested under Projects)
 # ===========================================================================
+
 
 @router.get("/{project_id}/subdivisions", response_model=list[SubDivisionOut])
 async def list_subdivisions(
@@ -125,12 +120,7 @@ async def list_subdivisions(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[SubDivisionOut]:
-    result = await db.execute(
-        select(SubDivision)
-        .where(SubDivision.project_id == project_id)
-        .order_by(SubDivision.name)
-    )
-    return result.scalars().all()  # type: ignore[return-value]
+    return await crud_project.get_subdivisions_for_project(db, project_id)  # type: ignore[return-value]
 
 
 @router.post(
@@ -144,16 +134,12 @@ async def create_subdivision(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> SubDivisionOut:
-    # Ensure the parent project exists
-    proj_result = await db.execute(select(Project).where(Project.id == project_id))
-    if not proj_result.scalar_one_or_none():
+    # Validate that the parent project exists before creating a child
+    parent = await crud_project.get_project_by_id(db, project_id)
+    if not parent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    data = payload.model_dump()
-    data["project_id"] = project_id    # Use path param, not body field
-    sd = SubDivision(**data)
-    db.add(sd)
-    await db.flush()
+    sd = await crud_project.create_subdivision(db, project_id, payload)
     return sd  # type: ignore[return-value]
 
 
@@ -164,14 +150,10 @@ async def update_subdivision(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> SubDivisionOut:
-    result = await db.execute(select(SubDivision).where(SubDivision.id == sd_id))
-    sd = result.scalar_one_or_none()
+    sd = await crud_project.get_subdivision_by_id(db, sd_id)
     if not sd:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubDivision not found")
-
-    for field, val in payload.model_dump(exclude_none=True).items():
-        setattr(sd, field, val)
-    db.add(sd)
+    sd = await crud_project.update_subdivision(db, sd, payload)
     return sd  # type: ignore[return-value]
 
 
@@ -181,8 +163,7 @@ async def delete_subdivision(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    result = await db.execute(select(SubDivision).where(SubDivision.id == sd_id))
-    sd = result.scalar_one_or_none()
+    sd = await crud_project.get_subdivision_by_id(db, sd_id)
     if not sd:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubDivision not found")
-    await db.delete(sd)
+    await crud_project.delete_subdivision(db, sd)

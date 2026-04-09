@@ -8,10 +8,12 @@ Design philosophy
 * Formulas are HARDCODED in Python — no formula strings, no eval(), no user-
   supplied expressions.  Only the *multiplier values* are dynamic (sourced from
   the RateCards table) so Admin can adjust rates without a code deploy.
-* All math operates on plain Python floats — no Pandas, no NumPy needed.
-* The function is intentionally pure (no side-effects): it receives raw inputs
-  and rate-card values and returns a fully-populated dict ready to be written
-  to the Budgets table.
+* All intermediate math uses ``decimal.Decimal`` for precision (Fix #14).
+  IEEE-754 float accumulates rounding errors in multi-step financial
+  calculations; Decimal avoids this.  Values are converted back to ``float``
+  only at the boundary where SQLAlchemy writes them to the database.
+* Zero-divisor guard: the function raises ``ValueError`` early if any rate-card
+  key that is used as a denominator is zero (Fix #4).
 
 Excel formula cross-reference (Demo.xlsx)
 ------------------------------------------
@@ -40,6 +42,7 @@ Row  | Label                      | Formula
 from __future__ import annotations
 
 import logging
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -57,10 +60,10 @@ REQUIRED_RATE_KEYS: list[str] = [
     "manual_tc_multiplier",       # 0.8
     "automation_tc_multiplier",   # 0.2
     "adhoc_request_multiplier",   # 0.2
-    "working_days_per_week",      # 5.0
+    "working_days_per_week",      # 5.0  ← divisor
     "hrs_per_wk_per_hc",          # 40.0
-    "manual_hc_divisor",          # 3.5
-    "automation_hc_divisor",      # 5.0
+    "manual_hc_divisor",          # 3.5  ← divisor
+    "automation_hc_divisor",      # 5.0  ← divisor
     "hc_rate_card",               # 2.00  ($/hr equivalent)
     "sqpm_boise_pct",             # 0.7
     "pl_pct",                     # 0.5
@@ -70,6 +73,13 @@ REQUIRED_RATE_KEYS: list[str] = [
     "project_manager_pct",        # 0.4
 ]
 
+# Keys used as denominators — must never be zero (Fix #4)
+_DIVISOR_KEYS: frozenset[str] = frozenset({
+    "working_days_per_week",
+    "manual_hc_divisor",
+    "automation_hc_divisor",
+})
+
 
 async def fetch_rate_cards(db: AsyncSession) -> dict[str, float]:
     """
@@ -78,6 +88,7 @@ async def fetch_rate_cards(db: AsyncSession) -> dict[str, float]:
     Raises
     ------
     ValueError  — if any required key is missing from the table.
+    ValueError  — if any divisor key has a value of zero (Fix #4).
     """
     result = await db.execute(select(RateCard))
     rate_cards = result.scalars().all()
@@ -90,7 +101,24 @@ async def fetch_rate_cards(db: AsyncSession) -> dict[str, float]:
             "Please seed the database with default rate cards."
         )
 
+    # Fix #4: Explicitly guard divisor keys — a zero value here causes
+    # ZeroDivisionError for every subsequent budget calculation.
+    zero_divisors = [k for k in _DIVISOR_KEYS if rates.get(k, 1) == 0]
+    if zero_divisors:
+        raise ValueError(
+            f"RateCard keys {zero_divisors} are used as divisors and must not "
+            "be zero.  Please update them via PATCH /admin/rate-cards."
+        )
+
     return rates
+
+
+def _D(value: int | float) -> Decimal:
+    """Convert a number to Decimal using its string representation to avoid
+    IEEE-754 representation noise (e.g. 0.2 → Decimal('0.2'), not
+    Decimal('0.20000000000000001...')).
+    """
+    return Decimal(str(value))
 
 
 def calculate_budget(
@@ -100,7 +128,13 @@ def calculate_budget(
     rates: dict[str, float],
 ) -> dict[str, Any]:
     """
-    Execute the full budget calculation using hardcoded formulas and dynamic rates.
+    Execute the full budget calculation using hardcoded formulas and dynamic
+    rates.
+
+    All intermediate arithmetic uses ``decimal.Decimal`` (Fix #14) to prevent
+    the accumulation of IEEE-754 float rounding errors in multi-step financial
+    calculations.  The output dict contains Python ``float`` values so
+    SQLAlchemy can write them directly to ``Float`` columns.
 
     Parameters
     ----------
@@ -110,33 +144,36 @@ def calculate_budget(
 
     Returns
     -------
-    Dict whose keys match the column names in the `budgets` table (excluding
-    `id`, `sub_division_id`, `tc_count`, `duration_in_days`).
+    Dict whose keys match the column names in the ``budgets`` table (excluding
+    ``id``, ``sub_division_id``, ``tc_count``, ``duration_in_days``).
     """
 
-    r = rates  # shorthand
+    r = {k: _D(v) for k, v in rates.items()}   # All rates as Decimal
+
+    tc = _D(tc_count)
+    dur = _D(duration_in_days)
 
     # ------------------------------------------------------------------
     # Step 1: TC decomposition
     # ------------------------------------------------------------------
-    manual_tc: float = tc_count * r["manual_tc_multiplier"]          # =C2*0.8
-    automation_tc: float = tc_count * r["automation_tc_multiplier"]  # =C2*0.2
-    adhoc: float = tc_count * r["adhoc_request_multiplier"]          # =C2*0.2
-    total_tc: float = manual_tc + automation_tc + adhoc               # =SUM(C5:C7)
+    manual_tc: Decimal = tc * r["manual_tc_multiplier"]          # =C2*0.8
+    automation_tc: Decimal = tc * r["automation_tc_multiplier"]  # =C2*0.2
+    adhoc: Decimal = tc * r["adhoc_request_multiplier"]          # =C2*0.2
+    total_tc: Decimal = manual_tc + automation_tc + adhoc         # =SUM(C5:C7)
 
     # ------------------------------------------------------------------
     # Step 2: Duration
     # ------------------------------------------------------------------
-    duration_wks: float = duration_in_days / r["working_days_per_week"]  # =C9/5
+    duration_wks: Decimal = dur / r["working_days_per_week"]     # =C9/5
 
     # ------------------------------------------------------------------
     # Step 3: Headcount (HC)
     # ------------------------------------------------------------------
     # Manual HC: =SUM(manual_tc, total_tc) / (duration_wks * manual_hc_divisor)
-    manual_hc: float = (manual_tc + total_tc) / (duration_wks * r["manual_hc_divisor"])
+    manual_hc: Decimal = (manual_tc + total_tc) / (duration_wks * r["manual_hc_divisor"])
 
     # Automation HC: =automation_tc / automation_hc_divisor
-    automation_hc: float = automation_tc / r["automation_hc_divisor"]
+    automation_hc: Decimal = automation_tc / r["automation_hc_divisor"]
 
     # ------------------------------------------------------------------
     # Step 4: Cost lines  (all: HC_count * hrs_per_week * rate * duration_wks)
@@ -145,36 +182,36 @@ def calculate_budget(
     hrs = r["hrs_per_wk_per_hc"]
 
     # Row 13: Manual HC Cost  = manual_hc * 40hr * rate * duration_wks
-    manual_hc_cost: float = manual_hc * hrs * hc_rate * duration_wks
+    manual_hc_cost: Decimal = manual_hc * hrs * hc_rate * duration_wks
 
     # Row 14: Automation HC Cost
-    automation_hc_cost: float = automation_hc * hrs * hc_rate * duration_wks
+    automation_hc_cost: Decimal = automation_hc * hrs * hc_rate * duration_wks
 
     # Row 15: Lead Cost  = 1 lead * 40hr * rate * duration_wks
-    lead_cost: float = 1.0 * hrs * hc_rate * duration_wks
+    lead_cost: Decimal = _D(1) * hrs * hc_rate * duration_wks
 
     # Row 16: SQPM Cost of Boise 70%  = hc_rate * duration_wks * 0.7 * hrs
-    sqpm_cost_boise: float = hrs * hc_rate * duration_wks * r["sqpm_boise_pct"]
+    sqpm_cost_boise: Decimal = hrs * hc_rate * duration_wks * r["sqpm_boise_pct"]
 
     # Row 17: PL 50%
-    pl_cost: float = hrs * hc_rate * duration_wks * r["pl_pct"]
+    pl_cost: Decimal = hrs * hc_rate * duration_wks * r["pl_pct"]
 
     # Row 18: Per WQE 40%  — note Excel uses factor of 6 WQE resources
-    per_wqe_cost: float = 6.0 * hrs * hc_rate * duration_wks * r["per_wqe_pct"]
+    per_wqe_cost: Decimal = _D(6) * hrs * hc_rate * duration_wks * r["per_wqe_pct"]
 
     # Row 19: aSQPM 80%
-    asqpm_cost: float = hrs * hc_rate * duration_wks * r["asqpm_pct"]
+    asqpm_cost: Decimal = hrs * hc_rate * duration_wks * r["asqpm_pct"]
 
     # Row 20: Lab Tech & Manager 40%  — note Excel uses factor of 2 resources
-    lab_tech_manager_cost: float = 2.0 * hrs * hc_rate * duration_wks * r["lab_tech_manager_pct"]
+    lab_tech_manager_cost: Decimal = _D(2) * hrs * hc_rate * duration_wks * r["lab_tech_manager_pct"]
 
     # Row 21: Project Manager 40%
-    project_manager_cost: float = hrs * hc_rate * duration_wks * r["project_manager_pct"]
+    project_manager_cost: Decimal = hrs * hc_rate * duration_wks * r["project_manager_pct"]
 
     # ------------------------------------------------------------------
     # Step 5: Total Budget  (sum of all cost rows 13-21)
     # ------------------------------------------------------------------
-    total_budget: float = (
+    total_budget: Decimal = (
         manual_hc_cost
         + automation_hc_cost
         + lead_cost
@@ -193,24 +230,31 @@ def calculate_budget(
         total_budget,
     )
 
+    # Round at the output boundary only, then convert to float for SQLAlchemy.
+    def _r4(d: Decimal) -> float:
+        return float(d.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+    def _r2(d: Decimal) -> float:
+        return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
     return {
-        "manual_tc_count": round(manual_tc, 4),
-        "automation_tc_count": round(automation_tc, 4),
-        "adhoc_request": round(adhoc, 4),
-        "total_tc": round(total_tc, 4),
-        "duration_wks": round(duration_wks, 4),
-        "manual_hc": round(manual_hc, 4),
-        "automation_hc": round(automation_hc, 4),
-        "manual_hc_cost": round(manual_hc_cost, 2),
-        "automation_hc_cost": round(automation_hc_cost, 2),
-        "lead_cost": round(lead_cost, 2),
-        "sqpm_cost_boise": round(sqpm_cost_boise, 2),
-        "pl_cost": round(pl_cost, 2),
-        "per_wqe_cost": round(per_wqe_cost, 2),
-        "asqpm_cost": round(asqpm_cost, 2),
-        "lab_tech_manager_cost": round(lab_tech_manager_cost, 2),
-        "project_manager_cost": round(project_manager_cost, 2),
-        "total_budget": round(total_budget, 2),
+        "manual_tc_count":      _r4(manual_tc),
+        "automation_tc_count":  _r4(automation_tc),
+        "adhoc_request":        _r4(adhoc),
+        "total_tc":             _r4(total_tc),
+        "duration_wks":         _r4(duration_wks),
+        "manual_hc":            _r4(manual_hc),
+        "automation_hc":        _r4(automation_hc),
+        "manual_hc_cost":       _r2(manual_hc_cost),
+        "automation_hc_cost":   _r2(automation_hc_cost),
+        "lead_cost":            _r2(lead_cost),
+        "sqpm_cost_boise":      _r2(sqpm_cost_boise),
+        "pl_cost":              _r2(pl_cost),
+        "per_wqe_cost":         _r2(per_wqe_cost),
+        "asqpm_cost":           _r2(asqpm_cost),
+        "lab_tech_manager_cost": _r2(lab_tech_manager_cost),
+        "project_manager_cost": _r2(project_manager_cost),
+        "total_budget":         _r2(total_budget),
     }
 
 

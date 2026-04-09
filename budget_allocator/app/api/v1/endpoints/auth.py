@@ -4,9 +4,21 @@ app/api/v1/endpoints/auth.py
 Authentication endpoints:
 
   POST /auth/login            — username + password [+ TOTP] → JWT pair
-  POST /auth/refresh          — refresh token → new access token
+  POST /auth/refresh          — refresh token → new access + refresh tokens (rotated)
   POST /auth/setup            — one-time setup link → set password + get TOTP QR
   POST /auth/change-password  — authenticated user changes own password
+
+Security fixes applied
+----------------------
+Fix #5  — Timing oracle: ``verify_password`` is now called even when the user
+           does not exist (constant-time dummy hash), preventing username
+           enumeration via response-time difference.
+Fix #3  — TOTP replay: successfully verified TOTP codes are recorded in
+           ``consumed_totp_codes`` for 90 seconds and rejected if replayed.
+Fix #6  — Refresh token rotation: ``POST /auth/refresh`` bumps ``token_version``
+           before minting new tokens, silently invalidating the old pair.
+Fix #16 — Dead code removed from refresh endpoint (spurious User-by-username
+           query that always returned None).
 """
 
 from __future__ import annotations
@@ -28,6 +40,7 @@ from app.core.security import (
     verify_password,
     verify_totp_code,
 )
+from app.crud import crud_totp, crud_user
 from app.models.models import AuthEventType, AuthLog, User
 from app.schemas.schemas import (
     ChangePasswordRequest,
@@ -40,6 +53,13 @@ from app.schemas.schemas import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Fix #5: Pre-computed dummy hash used when the username is not found.
+# verify_password is always called so the response time is indistinguishable
+# whether the user exists or not, preventing timing-based user enumeration.
+# ---------------------------------------------------------------------------
+_DUMMY_HASH: str = hash_password("dummy-timing-prevention-string-xK9!")
 
 
 # ---------------------------------------------------------------------------
@@ -78,23 +98,26 @@ async def login(
 
     Flow
     ----
-    1. Look up the user by username.
-    2. Verify the Argon2id password hash.
-    3. If the user has TOTP enabled (`totp_secret` is set), validate the code.
-    4. Mint and return tokens.
+    1. Opportunistically purge expired consumed TOTP codes (maintenance).
+    2. Look up the user by username.
+    3. Always verify a password hash (Fix #5 — constant time, no enumeration).
+    4. If the user has TOTP enabled, validate the code and check replay (Fix #3).
+    5. Mint and return tokens.
     """
     ip = _get_ip(request)
+
+    # Fix #3: Purge stale replay-prevention records opportunistically
+    await crud_totp.purge_expired_codes(db)
 
     result = await db.execute(select(User).where(User.username == payload.username))
     user: User | None = result.scalar_one_or_none()
 
-    def _fail_login():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
+    # Fix #5: Always call verify_password — prevents timing oracle.
+    # If the user doesn't exist, verify against the dummy hash (always False).
+    candidate_hash = user.hashed_password if user else _DUMMY_HASH
+    password_ok = verify_password(payload.password, candidate_hash)
 
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    if not user or not password_ok:
         if user:
             await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
         raise HTTPException(
@@ -118,6 +141,15 @@ async def login(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid TOTP code",
             )
+        # Fix #3: Reject replayed TOTP codes (same code used within 90s)
+        if await crud_totp.is_code_consumed(db, user.id, payload.totp_code):
+            await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="TOTP code has already been used. Wait for the next code.",
+            )
+        # Mark code as consumed so it cannot be replayed
+        await crud_totp.consume_code(db, user.id, payload.totp_code)
 
     await _log_auth_event(db, user.id, AuthEventType.LOGIN_SUCCESS, ip)
 
@@ -145,27 +177,37 @@ async def refresh_token(
     payload: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    """Exchange a valid refresh token for a new access token."""
-    from jose import JWTError
+    """
+    Exchange a valid refresh token for a new access + refresh token pair.
+
+    Fix #6 — Refresh Token Rotation
+    --------------------------------
+    On every successful refresh, ``token_version`` is incremented.  This
+    immediately invalidates the old refresh token (it now carries a stale
+    ``ver`` claim) enforcing single-use semantics without a token denylist.
+
+    Fix #16 — Dead Code
+    --------------------
+    Removed the spurious ``select(User).where(User.username == user_id)``
+    query that always returned None (user_id is a UUID string, not a username).
+    """
+    import uuid as _uuid
 
     try:
         data = decode_token(payload.refresh_token)
         if data.get("kind") != "refresh":
             raise ValueError("Not a refresh token")
-        user_id = data["sub"]
-        token_ver = data["ver"]
+        user_id_str: str = data["sub"]
+        token_ver: int = data["ver"]
+        user_id = _uuid.UUID(user_id_str)   # Fix #16: parse UUID directly
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
         )
 
-    result = await db.execute(select(User).where(User.username == user_id))
-    # User lookup by ID string
-    from sqlalchemy import text
-    import uuid as _uuid
-    result2 = await db.execute(select(User).where(User.id == _uuid.UUID(user_id)))
-    user: User | None = result2.scalar_one_or_none()
+    # Fix #16: Single targeted query — no spurious username lookup
+    user: User | None = await crud_user.get_user_by_id(db, user_id)
 
     if user is None or not user.is_active or user.token_version != token_ver:
         raise HTTPException(
@@ -173,17 +215,20 @@ async def refresh_token(
             detail="Token invalidated — please log in again",
         )
 
+    # Fix #6: Rotate token version — old refresh token is now permanently invalid
+    user = await crud_user.rotate_token_version(db, user)
+
     new_access = create_token(
         user_id=user.id,
         kind="access",
-        token_version=user.token_version,
+        token_version=user.token_version,  # new version
         username=user.username,
         is_admin=user.is_admin,
     )
     new_refresh = create_token(
         user_id=user.id,
         kind="refresh",
-        token_version=user.token_version,
+        token_version=user.token_version,  # new version
     )
     return TokenResponse(access_token=new_access, refresh_token=new_refresh)
 
@@ -202,8 +247,8 @@ async def setup_account(
     Complete account provisioning:
     1. Set the user's password (Argon2id).
     2. Generate a fresh TOTP secret and return the provisioning URI.
-    3. Mark `requires_password_change = False`.
-    4. Increment `token_version` to invalidate the setup token immediately.
+    3. Mark ``requires_password_change = False``.
+    4. Increment ``token_version`` to invalidate the setup token immediately.
     """
     user.hashed_password = hash_password(payload.new_password)
     user.totp_secret = generate_totp_secret()
@@ -237,7 +282,7 @@ async def change_password(
 
     On success:
     * Hashes the new password with Argon2id.
-    * Increments `token_version` — IMMEDIATELY invalidates all existing JWT
+    * Increments ``token_version`` — IMMEDIATELY invalidates all existing JWT
       access and refresh tokens for this user (no Redis denylist needed).
     """
     if not verify_password(payload.current_password, current_user.hashed_password):

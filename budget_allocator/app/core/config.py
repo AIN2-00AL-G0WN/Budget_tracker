@@ -3,13 +3,14 @@ app/core/config.py
 ------------------
 Application-wide settings driven by environment variables (or a .env file).
 
-All secrets (secret_key, db credentials) should be provided via environment
-variables in production — never hard-coded.
+All secrets (secret_key, db credentials) MUST be provided via environment
+variables.  The application refuses to start if SECRET_KEY is absent or
+still set to the well-known placeholder value (Fix #2).
 """
 
 from __future__ import annotations
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,14 +57,29 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Security / JWT
     # ------------------------------------------------------------------
+    # REQUIRED — no default.  Generate with: openssl rand -hex 32
+    # The app will refuse to start if this is missing or still set to the
+    # placeholder value.
     secret_key: str = Field(
-        default="CHANGE_ME_IN_PRODUCTION_use_openssl_rand_hex_32",
-        description="Secret key for signing JWTs — MUST be changed in production.",
+        ...,
+        min_length=32,
+        description="JWT signing secret — generate with: openssl rand -hex 32",
     )
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     setup_token_expire_hours: int = 72    # One-time provisioning link TTL
+
+    @field_validator("secret_key")
+    @classmethod
+    def _reject_placeholder_key(cls, v: str) -> str:
+        """Prevent accidental production deployment with the well-known placeholder."""
+        if v.startswith("CHANGE_ME"):
+            raise ValueError(
+                "SECRET_KEY is still set to the placeholder value. "
+                "Generate a real key with: openssl rand -hex 32"
+            )
+        return v
 
     # ------------------------------------------------------------------
     # TOTP / MFA
