@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
@@ -176,11 +176,12 @@ async def delete_budget(
     budget_id: uuid.UUID,
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     budget = await crud_budget.get_budget_by_id(db, budget_id)
     if not budget:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
     await crud_budget.delete_budget(db, budget)
+    return Response(status_code=204)
 
 
 # ===========================================================================
@@ -202,10 +203,11 @@ async def mark_notifications_read(
     payload: NotificationMarkRead,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     """Mark a list of notification IDs as read for the current user."""
     await crud_notification.mark_notifications_read(
         db,
         current_user.id,
         payload.notification_ids,
     )
+    return Response(status_code=204)

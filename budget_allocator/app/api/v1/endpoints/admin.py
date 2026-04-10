@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -220,11 +220,12 @@ async def delete_rate_card(
     rc_id: int,
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     rc = await crud_rate_card.get_rate_card_by_id(db, rc_id)
     if not rc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RateCard not found")
     await crud_rate_card.delete_rate_card(db, rc)
+    return Response(status_code=204)
 
 
 # ===========================================================================

@@ -85,9 +85,18 @@ class SetupAccountResponse(BaseModel):
     username: str
 
 
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=12)
+
+
+
+class ForgotPasswordRequest(BaseModel):
+    """
+    Self-service password reset using TOTP as proof-of-identity.
+    No current password required — the authenticator code replaces it.
+    """
+    username: str = Field(..., min_length=3, max_length=64)
+    new_password: str = Field(..., min_length=12, max_length=128)
+    confirm_password: str = Field(..., min_length=12, max_length=128)
+    totp_code: str = Field(..., min_length=6, max_length=6, description="6-digit code from your Authenticator app")
 
     @field_validator("new_password")
     @classmethod
@@ -104,6 +113,72 @@ class ChangePasswordRequest(BaseModel):
         if errors:
             raise ValueError(f"Password must contain: {', '.join(errors)}")
         return v
+
+    @model_validator(mode="after")
+    def _passwords_match(self) -> "ForgotPasswordRequest":
+        if self.new_password != self.confirm_password:
+            raise ValueError("new_password and confirm_password do not match")
+        return self
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Returned after a successful self-service password reset."""
+    message: str = (
+        "Password has been reset successfully. All existing sessions have been invalidated."
+    )
+
+
+class ChangePasswordRequest(BaseModel):
+    """
+    Authenticated password change for logged-in users.
+    Requires the current password as proof of intent.
+    """
+    current_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=12, max_length=128)
+    confirm_password: str = Field(..., min_length=12, max_length=128)
+    totp_code: Optional[str] = Field(
+        default=None,
+        min_length=6,
+        max_length=6,
+        description="6-digit TOTP code — required if MFA is enabled for the account",
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def _password_strength(cls, v: str) -> str:
+        errors: list[str] = []
+        if not any(c.isupper() for c in v):
+            errors.append("at least one uppercase letter")
+        if not any(c.islower() for c in v):
+            errors.append("at least one lowercase letter")
+        if not any(c.isdigit() for c in v):
+            errors.append("at least one digit")
+        if not any(c in "!@#$%^&*()-_=+[]{}|;:',.<>?/" for c in v):
+            errors.append("at least one special character")
+        if errors:
+            raise ValueError(f"Password must contain: {', '.join(errors)}")
+        return v
+
+    @model_validator(mode="after")
+    def _passwords_match(self) -> "ChangePasswordRequest":
+        if self.new_password != self.confirm_password:
+            raise ValueError("new_password and confirm_password do not match")
+        return self
+
+
+class ChangePasswordResponse(BaseModel):
+    """Returned after a successful password change."""
+    message: str = (
+        "Password has been changed successfully. All other active sessions "
+        "have been invalidated."
+    )
+    totp_provisioning_uri: Optional[str] = Field(
+        default=None,
+        description=(
+            "Present only when MFA was not previously configured. "
+            "Scan this URI with your Authenticator app to enable MFA."
+        ),
+    )
 
 
 # ===========================================================================

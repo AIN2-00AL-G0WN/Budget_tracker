@@ -27,7 +27,7 @@ from __future__ import annotations
 import uuid
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.api.dependencies.auth import get_current_admin_user, get_current_user
 from app.core.database import get_db
@@ -102,11 +102,12 @@ async def delete_project(
     project_id: uuid.UUID,
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     project = await crud_project.get_project_by_id(db, project_id)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     await crud_project.delete_project(db, project)
+    return Response(status_code=204)
 
 
 # ===========================================================================
@@ -162,8 +163,9 @@ async def delete_subdivision(
     sd_id: uuid.UUID,
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     sd = await crud_project.get_subdivision_by_id(db, sd_id)
     if not sd:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubDivision not found")
     await crud_project.delete_subdivision(db, sd)
+    return Response(status_code=204)

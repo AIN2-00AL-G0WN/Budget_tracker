@@ -50,6 +50,7 @@ class AuthEventType(str, enum.Enum):
     LOGIN_SUCCESS = "LOGIN_SUCCESS"
     LOGIN_FAILED = "LOGIN_FAILED"
     PASSWORD_CHANGED = "PASSWORD_CHANGED"
+    PASSWORD_RESET = "PASSWORD_RESET"      # self-service forgot-password via TOTP
     MFA_ENABLED = "MFA_ENABLED"
     TOKEN_INVALIDATED = "TOKEN_INVALIDATED"
 
@@ -85,9 +86,9 @@ class User(Base):
     * `is_admin` — grants access to admin-only endpoints (rate-card mutation,
       user provisioning, password reset generation).
     * `requires_password_change` — set True after provisioning / admin reset;
-      the frontend should redirect the user to the change-password flow.
+      the frontend should redirect the user to the password-reset flow.
     * `totp_secret` — base32 secret stored per-user; NULL until MFA is set up.
-    * `token_version` — incremented on password change / forced logout so that
+    * `token_version` — incremented on password reset / forced logout so that
       all issued JWTs for this user become immediately invalid (no denylist needed).
     """
 
