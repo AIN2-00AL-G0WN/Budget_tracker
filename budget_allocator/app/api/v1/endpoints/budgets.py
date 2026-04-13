@@ -34,6 +34,7 @@ from app.crud import crud_budget, crud_notification, crud_project
 from app.models.models import User
 from app.schemas.schemas import (
     BudgetCreate,
+    BudgetUpdate,
     BudgetOut,
     NotificationMarkRead,
     NotificationOut,
@@ -136,7 +137,7 @@ async def get_budget(
 @router.patch("/budgets/{budget_id}", response_model=BudgetOut)
 async def update_budget(
     budget_id: uuid.UUID,
-    payload: BudgetCreate,
+    payload: BudgetUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BudgetOut:
