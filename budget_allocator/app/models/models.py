@@ -33,7 +33,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
+    Index,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
@@ -226,6 +226,11 @@ class Project(Base):
         default=ProjectStatus.ACTIVE,
         nullable=False,
     )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -280,10 +285,23 @@ class SubDivision(Base):
         default=SubDivisionStatus.PLANNED,
         nullable=False,
     )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
 
     __table_args__ = (
-        # A project cannot have two sub-divisions with identical names
-        UniqueConstraint("project_id", "name", name="uq_subdivision_project_name"),
+        # A project cannot have two active sub-divisions with identical names.
+        # This is a partial index to allow creating a new subdivision with the
+        # same name if the old one was soft-deleted.
+        Index(
+            "uq_subdivision_project_name",
+            "project_id",
+            "name",
+            unique=True,
+            postgresql_where=(is_deleted == False),  # noqa: E712
+        ),
     )
 
     # Relationships
@@ -378,6 +396,32 @@ class Budget(Base):
 
     total_budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # ---- Per-Budget Rate Overrides (NULL = use global RateCard value) --------
+    manual_tc_multiplier_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    automation_tc_multiplier_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    adhoc_request_multiplier_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    working_days_per_week_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hrs_per_wk_per_hc_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    manual_hc_divisor_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    automation_hc_divisor_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hc_rate_card_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sqpm_boise_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pl_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    per_wqe_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    asqpm_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lab_tech_manager_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    project_manager_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

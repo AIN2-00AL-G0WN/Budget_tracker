@@ -25,20 +25,23 @@ Route summary
 
 from __future__ import annotations
 
-import uuid
 import logging
+import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_admin_user
 from app.core.database import get_db
 from app.core.security import create_token, hash_password
-from app.crud import crud_rate_card, crud_user
+from app.crud import crud_rate_card, crud_user, crud_audit
 from app.models.models import AuditLog, User
 from app.schemas.schemas import (
     AuditLogOut,
+    PaginatedResponse,
     RateCardCreate,
     RateCardOut,
     RateCardUpdate,
@@ -47,6 +50,7 @@ from app.schemas.schemas import (
     UserProvisionRequest,
     UserProvisionResponse,
 )
+from app.services.calculation_service import REQUIRED_RATE_KEYS
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
@@ -137,12 +141,16 @@ async def reset_user_password(
     return ResetLinkResponse(setup_token=setup_token)
 
 
-@router.get("/users", response_model=list[UserOut])
+@router.get("/users", response_model=PaginatedResponse[UserOut])
 async def list_users(
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
-) -> list[UserOut]:
-    return await crud_user.get_all_users(db)  # type: ignore[return-value]
+) -> PaginatedResponse[UserOut]:
+    total = await crud_user.count_all_users(db)
+    items = await crud_user.get_all_users_paginated(db, limit=limit, offset=offset)
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.patch("/users/{user_id}/activate", response_model=UserOut)
@@ -177,6 +185,14 @@ async def list_rate_cards(
     return await crud_rate_card.get_all_rate_cards(db)  # type: ignore[return-value]
 
 
+@router.get("/rate-cards/required-keys", response_model=list[str])
+async def get_required_rate_keys(
+    _: User = Depends(get_current_admin_user),
+) -> list[str]:
+    """Return the list of rate card keys required for budget calculations."""
+    return REQUIRED_RATE_KEYS
+
+
 @router.post(
     "/rate-cards",
     response_model=RateCardOut,
@@ -208,7 +224,22 @@ async def update_rate_card(
     rc = await crud_rate_card.get_rate_card_by_id(db, rc_id)
     if not rc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RateCard not found")
-    rc = await crud_rate_card.update_rate_card(db, rc, payload)
+
+    # Guard: prevent renaming a required key to a non-required key name
+    if rc.key_name in REQUIRED_RATE_KEYS and payload.key_name and payload.key_name != rc.key_name:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Cannot rename required system rate card key '{rc.key_name}'",
+        )
+
+    try:
+        rc = await crud_rate_card.update_rate_card(db, rc, payload)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A rate card with this key name already exists"
+        )
+        
     logger.info(
         "Admin %s updated rate card '%s' → %.4f", admin.username, rc.key_name, rc.value
     )
@@ -224,6 +255,14 @@ async def delete_rate_card(
     rc = await crud_rate_card.get_rate_card_by_id(db, rc_id)
     if not rc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RateCard not found")
+
+    # Guard: prevent deletion of required system rate cards
+    if rc.key_name in REQUIRED_RATE_KEYS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Cannot delete required system rate card '{rc.key_name}'",
+        )
+
     await crud_rate_card.delete_rate_card(db, rc)
     return Response(status_code=204)
 
@@ -243,13 +282,6 @@ async def get_audit_logs(
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditLogOut]:
     """Return audit logs, optionally filtered by entity type / ID."""
-    # AuditLog is append-only and has no mutation operations, so its query
-    # stays directly in this router rather than in a dedicated CRUD module.
-    q = select(AuditLog).order_by(desc(AuditLog.timestamp))
-    if entity_type:
-        q = q.where(AuditLog.entity_type == entity_type)
-    if entity_id:
-        q = q.where(AuditLog.entity_id == entity_id)
-    q = q.limit(limit).offset(offset)
-    result = await db.execute(q)
-    return result.scalars().all()  # type: ignore[return-value]
+    return await crud_audit.get_audit_logs(
+        db, entity_type=entity_type, entity_id=entity_id, limit=limit, offset=offset
+    )  # type: ignore[return-value]

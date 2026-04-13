@@ -42,12 +42,13 @@ Row  | Label                      | Formula
 from __future__ import annotations
 
 import logging
+import math
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crud import crud_rate_card
 from app.models.models import RateCard
 
 logger = logging.getLogger(__name__)
@@ -90,8 +91,7 @@ async def fetch_rate_cards(db: AsyncSession) -> dict[str, float]:
     ValueError  — if any required key is missing from the table.
     ValueError  — if any divisor key has a value of zero (Fix #4).
     """
-    result = await db.execute(select(RateCard))
-    rate_cards = result.scalars().all()
+    rate_cards = await crud_rate_card.get_all_rate_cards(db)
     rates = {rc.key_name: rc.value for rc in rate_cards}
 
     missing = [k for k in REQUIRED_RATE_KEYS if k not in rates]
@@ -126,10 +126,11 @@ def calculate_budget(
     tc_count: int,
     duration_in_days: int,
     rates: dict[str, float],
+    overrides: dict[str, float | None] | None = None,
 ) -> dict[str, Any]:
     """
     Execute the full budget calculation using hardcoded formulas and dynamic
-    rates.
+    rates.  Per-budget overrides take priority over global rate-card values.
 
     All intermediate arithmetic uses ``decimal.Decimal`` (Fix #14) to prevent
     the accumulation of IEEE-754 float rounding errors in multi-step financial
@@ -141,14 +142,37 @@ def calculate_budget(
     tc_count          : Total test case count (manual manager input).
     duration_in_days  : Engagement duration in working days (manual input).
     rates             : Dict of rate-card values fetched from the DB.
+    overrides         : Optional dict of per-budget override values.  A key
+                        whose value is ``None`` is treated as "no override".
 
     Returns
     -------
     Dict whose keys match the column names in the ``budgets`` table (excluding
     ``id``, ``sub_division_id``, ``tc_count``, ``duration_in_days``).
     """
+    _overrides: dict[str, float | None] = overrides or {}
 
-    r = {k: _D(v) for k, v in rates.items()}   # All rates as Decimal
+    # Bug #4 fix: guard against zero-valued divisor overrides, same as fetch_rate_cards
+    _DIVISOR_OVERRIDE_KEYS = {
+        "working_days_per_week_override",
+        "manual_hc_divisor_override",
+        "automation_hc_divisor_override",
+    }
+    for _key in _DIVISOR_OVERRIDE_KEYS:
+        _val = _overrides.get(_key)
+        if _val is not None and _val == 0:
+            raise ValueError(
+                f"Override '{_key}' is used as a divisor and cannot be zero."
+            )
+
+    def _rate(global_key: str, override_key: str) -> Decimal:
+        """
+        Return the effective rate for a given key.
+        Uses the per-budget override when it is explicitly provided (non-None),
+        otherwise falls back to the global RateCard value.
+        """
+        ov = _overrides.get(override_key)
+        return _D(ov) if ov is not None else _D(rates[global_key])
 
     tc = _D(tc_count)
     dur = _D(duration_in_days)
@@ -156,30 +180,30 @@ def calculate_budget(
     # ------------------------------------------------------------------
     # Step 1: TC decomposition
     # ------------------------------------------------------------------
-    manual_tc: Decimal = tc * r["manual_tc_multiplier"]          # =C2*0.8
-    automation_tc: Decimal = tc * r["automation_tc_multiplier"]  # =C2*0.2
-    adhoc: Decimal = tc * r["adhoc_request_multiplier"]          # =C2*0.2
+    manual_tc: Decimal = _D(math.ceil(tc * _rate("manual_tc_multiplier", "manual_tc_multiplier_override")))
+    automation_tc: Decimal = _D(math.ceil(tc * _rate("automation_tc_multiplier", "automation_tc_multiplier_override")))
+    adhoc: Decimal = _D(math.ceil(tc * _rate("adhoc_request_multiplier", "adhoc_request_multiplier_override")))
     total_tc: Decimal = manual_tc + automation_tc + adhoc         # =SUM(C5:C7)
 
     # ------------------------------------------------------------------
     # Step 2: Duration
     # ------------------------------------------------------------------
-    duration_wks: Decimal = dur / r["working_days_per_week"]     # =C9/5
+    duration_wks: Decimal = dur / _rate("working_days_per_week", "working_days_per_week_override")
 
     # ------------------------------------------------------------------
     # Step 3: Headcount (HC)
     # ------------------------------------------------------------------
     # Manual HC: =SUM(manual_tc, total_tc) / (duration_wks * manual_hc_divisor)
-    manual_hc: Decimal = (manual_tc + total_tc) / (duration_wks * r["manual_hc_divisor"])
+    manual_hc: Decimal = _D(math.ceil((manual_tc + total_tc) / (duration_wks * _rate("manual_hc_divisor", "manual_hc_divisor_override"))))
 
     # Automation HC: =automation_tc / automation_hc_divisor
-    automation_hc: Decimal = automation_tc / r["automation_hc_divisor"]
+    automation_hc: Decimal = _D(math.ceil(automation_tc / _rate("automation_hc_divisor", "automation_hc_divisor_override")))
 
     # ------------------------------------------------------------------
     # Step 4: Cost lines  (all: HC_count * hrs_per_week * rate * duration_wks)
     # ------------------------------------------------------------------
-    hc_rate = r["hc_rate_card"]
-    hrs = r["hrs_per_wk_per_hc"]
+    hc_rate = _rate("hc_rate_card", "hc_rate_card_override")
+    hrs = _rate("hrs_per_wk_per_hc", "hrs_per_wk_per_hc_override")
 
     # Row 13: Manual HC Cost  = manual_hc * 40hr * rate * duration_wks
     manual_hc_cost: Decimal = manual_hc * hrs * hc_rate * duration_wks
@@ -191,22 +215,22 @@ def calculate_budget(
     lead_cost: Decimal = _D(1) * hrs * hc_rate * duration_wks
 
     # Row 16: SQPM Cost of Boise 70%  = hc_rate * duration_wks * 0.7 * hrs
-    sqpm_cost_boise: Decimal = hrs * hc_rate * duration_wks * r["sqpm_boise_pct"]
+    sqpm_cost_boise: Decimal = hrs * hc_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
 
     # Row 17: PL 50%
-    pl_cost: Decimal = hrs * hc_rate * duration_wks * r["pl_pct"]
+    pl_cost: Decimal = hrs * hc_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
 
     # Row 18: Per WQE 40%  — note Excel uses factor of 6 WQE resources
-    per_wqe_cost: Decimal = _D(6) * hrs * hc_rate * duration_wks * r["per_wqe_pct"]
+    per_wqe_cost: Decimal = _D(6) * hrs * hc_rate * duration_wks * _rate("per_wqe_pct", "per_wqe_pct_override")
 
     # Row 19: aSQPM 80%
-    asqpm_cost: Decimal = hrs * hc_rate * duration_wks * r["asqpm_pct"]
+    asqpm_cost: Decimal = hrs * hc_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
 
     # Row 20: Lab Tech & Manager 40%  — note Excel uses factor of 2 resources
-    lab_tech_manager_cost: Decimal = _D(2) * hrs * hc_rate * duration_wks * r["lab_tech_manager_pct"]
+    lab_tech_manager_cost: Decimal = _D(2) * hrs * hc_rate * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
 
     # Row 21: Project Manager 40%
-    project_manager_cost: Decimal = hrs * hc_rate * duration_wks * r["project_manager_pct"]
+    project_manager_cost: Decimal = hrs * hc_rate * duration_wks * _rate("project_manager_pct", "project_manager_pct_override")
 
     # ------------------------------------------------------------------
     # Step 5: Total Budget  (sum of all cost rows 13-21)
@@ -238,13 +262,13 @@ def calculate_budget(
         return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     return {
-        "manual_tc_count":      _r4(manual_tc),
-        "automation_tc_count":  _r4(automation_tc),
-        "adhoc_request":        _r4(adhoc),
-        "total_tc":             _r4(total_tc),
+        "manual_tc_count":      int(manual_tc),
+        "automation_tc_count":  int(automation_tc),
+        "adhoc_request":        int(adhoc),
+        "total_tc":             int(total_tc),
         "duration_wks":         _r4(duration_wks),
-        "manual_hc":            _r4(manual_hc),
-        "automation_hc":        _r4(automation_hc),
+        "manual_hc":            int(manual_hc),
+        "automation_hc":        int(automation_hc),
         "manual_hc_cost":       _r2(manual_hc_cost),
         "automation_hc_cost":   _r2(automation_hc_cost),
         "lead_cost":            _r2(lead_cost),
@@ -263,10 +287,22 @@ async def compute_and_get_budget_fields(
     tc_count: int,
     duration_in_days: int,
     db: AsyncSession,
+    overrides: dict[str, float | None] | None = None,
 ) -> dict[str, Any]:
     """
     Convenience coroutine: fetch rates then calculate.
     Use this from the router/service layer.
+
+    Parameters
+    ----------
+    overrides : Optional dict of per-budget override values keyed by the
+                ``*_override`` column name (e.g. ``hc_rate_card_override``).
+                A value of ``None`` means "use global rate".
     """
     rates = await fetch_rate_cards(db)
-    return calculate_budget(tc_count=tc_count, duration_in_days=duration_in_days, rates=rates)
+    return calculate_budget(
+        tc_count=tc_count,
+        duration_in_days=duration_in_days,
+        rates=rates,
+        overrides=overrides,
+    )

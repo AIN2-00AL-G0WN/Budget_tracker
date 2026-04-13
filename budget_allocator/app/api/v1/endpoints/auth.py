@@ -52,6 +52,7 @@ from app.schemas.schemas import (
     SetupAccountRequest,
     SetupAccountResponse,
     TokenResponse,
+    UserOut,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -84,6 +85,18 @@ def _get_ip(request: Request) -> str | None:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+# ---------------------------------------------------------------------------
+# GET /auth/me
+# ---------------------------------------------------------------------------
+
+@router.get("/me", response_model=UserOut)
+async def get_current_user_profile(
+    current_user: User = Depends(get_current_user),
+) -> UserOut:
+    """Return the profile of the currently authenticated user."""
+    return current_user  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

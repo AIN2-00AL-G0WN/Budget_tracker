@@ -27,9 +27,11 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+import datetime
+from enum import Enum
 from typing import Any
 
-from sqlalchemy import event, inspect
+from sqlalchemy import event, inspect, insert
 from sqlalchemy.orm import Session
 
 from app.models.models import (
@@ -69,6 +71,10 @@ def _serialize(value: Any) -> Any:
         return None
     if isinstance(value, uuid.UUID):
         return str(value)
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
     return value
 
 
@@ -100,7 +106,7 @@ def _get_changed_columns(instance: Any) -> dict[str, tuple[Any, Any]]:
 
 
 def _write_audit_row(
-    session: Session,
+    connection: Any,
     entity_type: str,
     entity_id: str,
     action: AuditAction,
@@ -108,12 +114,12 @@ def _write_audit_row(
     new_value: dict | None,
 ) -> None:
     """
-    Append an AuditLog row to the current session.
+    Append an AuditLog row using the active database connection.
 
-    We use `session.add()` rather than a raw INSERT so the row participates
-    in the same unit-of-work and is rolled back if the parent transaction fails.
+    Using `connection.execute` instead of `session.add()` avoids the SAWarning
+    about modifying the session during the flush process.
     """
-    log_entry = AuditLog(
+    stmt = insert(AuditLog).values(
         entity_type=entity_type,
         entity_id=entity_id,
         action=action,
@@ -121,9 +127,7 @@ def _write_audit_row(
         new_value=new_value,
         user_id=current_user_id.get(),   # Fix #10: populated from request context
     )
-    # Use the same session but avoid re-triggering the listener by adding
-    # directly to the identity map without going through the unit-of-work.
-    session.add(log_entry)
+    connection.execute(stmt)
 
 
 # ---------------------------------------------------------------------------
@@ -137,13 +141,10 @@ def _make_listeners(model_class: type) -> None:
 
     @event.listens_for(model_class, "after_insert", propagate=True)
     def _after_insert(mapper, connection, target) -> None:  # noqa: ANN001
-        session = Session.object_session(target)
-        if session is None:
-            return
         new_val = _instance_to_dict(target)
         logger.debug("AUDIT INSERT %s id=%s", entity_name, _pk_to_str(target))
         _write_audit_row(
-            session,
+            connection,
             entity_type=entity_name,
             entity_id=_pk_to_str(target),
             action=AuditAction.CREATE,
@@ -153,9 +154,6 @@ def _make_listeners(model_class: type) -> None:
 
     @event.listens_for(model_class, "after_update", propagate=True)
     def _after_update(mapper, connection, target) -> None:  # noqa: ANN001
-        session = Session.object_session(target)
-        if session is None:
-            return
         changed = _get_changed_columns(target)
         if not changed:
             return   # No-op flush (e.g. relationship cascade)
@@ -163,7 +161,7 @@ def _make_listeners(model_class: type) -> None:
         new_val = {k: v[1] for k, v in changed.items()}
         logger.debug("AUDIT UPDATE %s id=%s cols=%s", entity_name, _pk_to_str(target), list(changed))
         _write_audit_row(
-            session,
+            connection,
             entity_type=entity_name,
             entity_id=_pk_to_str(target),
             action=AuditAction.UPDATE,
@@ -173,13 +171,10 @@ def _make_listeners(model_class: type) -> None:
 
     @event.listens_for(model_class, "after_delete", propagate=True)
     def _after_delete(mapper, connection, target) -> None:  # noqa: ANN001
-        session = Session.object_session(target)
-        if session is None:
-            return
         old_val = _instance_to_dict(target)
         logger.debug("AUDIT DELETE %s id=%s", entity_name, _pk_to_str(target))
         _write_audit_row(
-            session,
+            connection,
             entity_type=entity_name,
             entity_id=_pk_to_str(target),
             action=AuditAction.DELETE,

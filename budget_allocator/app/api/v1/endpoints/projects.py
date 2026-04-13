@@ -27,21 +27,24 @@ from __future__ import annotations
 import uuid
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_admin_user, get_current_user
 from app.core.database import get_db
 from app.crud import crud_project
-from app.models.models import User
+from app.models.models import Budget, Project, SubDivision, User
 from app.schemas.schemas import (
+    PaginatedResponse,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
     SubDivisionCreate,
     SubDivisionOut,
     SubDivisionUpdate,
+    BudgetSummaryOut,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 logger = logging.getLogger(__name__)
@@ -52,12 +55,19 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 
 
-@router.get("", response_model=list[ProjectOut])
+@router.get("", response_model=PaginatedResponse[ProjectOut])
 async def list_projects(
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[ProjectOut]:
-    return await crud_project.get_all_projects(db)  # type: ignore[return-value]
+) -> PaginatedResponse[ProjectOut]:
+    # Count total non-deleted projects
+    total = await crud_project.count_active_projects(db)
+
+    # Fetch paginated slice
+    items = await crud_project.get_all_projects_paginated(db, limit=limit, offset=offset)
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -115,13 +125,21 @@ async def delete_project(
 # ===========================================================================
 
 
-@router.get("/{project_id}/subdivisions", response_model=list[SubDivisionOut])
+@router.get("/{project_id}/subdivisions", response_model=PaginatedResponse[SubDivisionOut])
 async def list_subdivisions(
     project_id: uuid.UUID,
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[SubDivisionOut]:
-    return await crud_project.get_subdivisions_for_project(db, project_id)  # type: ignore[return-value]
+) -> PaginatedResponse[SubDivisionOut]:
+    # Count total non-deleted subdivisions for this project
+    total = await crud_project.count_active_subdivisions_for_project(db, project_id)
+
+    items = await crud_project.get_subdivisions_for_project_paginated(
+        db, project_id, limit=limit, offset=offset
+    )
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post(
@@ -169,3 +187,47 @@ async def delete_subdivision(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubDivision not found")
     await crud_project.delete_subdivision(db, sd)
     return Response(status_code=204)
+
+
+# ===========================================================================
+# Project Summary / Analytics
+# ===========================================================================
+
+
+@router.get("/{project_id}/summary", tags=["projects"], response_model=BudgetSummaryOut)
+async def get_project_summary(
+    project_id: uuid.UUID,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BudgetSummaryOut:
+    """
+    Aggregate budget figures across all non-deleted sub-divisions for a project.
+
+    Returns totals for `total_budget`, `manual_hc_cost`, and `automation_hc_cost`.
+    """
+    # Verify project exists
+    project = await crud_project.get_project_by_id(db, project_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    summary_data = await crud_project.get_project_summary(db, project_id)
+    if not summary_data:
+        # If no summary exists, return an empty one
+        return BudgetSummaryOut(
+            tc_count=0,
+            duration_wks=0.0,
+            manual_hc=0,
+            automation_hc=0,
+            manual_hc_cost=0.0,
+            automation_hc_cost=0.0,
+            lead_cost=0.0,
+            sqpm_cost_boise=0.0,
+            pl_cost=0.0,
+            per_wqe_cost=0.0,
+            asqpm_cost=0.0,
+            lab_tech_manager_cost=0.0,
+            project_manager_cost=0.0,
+            total_budget=0.0,
+        )
+
+    return BudgetSummaryOut(**summary_data)

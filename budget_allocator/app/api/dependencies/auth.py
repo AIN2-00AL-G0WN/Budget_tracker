@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import decode_token, verify_token_kind
 from app.core.context import current_user_id   # Fix #10
+from app.crud import crud_user
 from app.models.models import User
 
 bearer_scheme = HTTPBearer(auto_error=True)
@@ -52,8 +53,7 @@ async def _get_user_from_token(
     except (JWTError, ValueError):
         raise credentials_exception
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user: User | None = result.scalar_one_or_none()
+    user: User | None = await crud_user.get_user_by_id(db, user_id)
 
     if user is None:
         raise credentials_exception

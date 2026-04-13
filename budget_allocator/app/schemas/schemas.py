@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import Generic, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -26,6 +26,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class _Base(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Generic paginated response envelope used across list endpoints."""
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
 
 
 # ===========================================================================
@@ -237,16 +248,35 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=256)
     status: str = "ACTIVE"
 
+    @field_validator("status")
+    @classmethod
+    def _valid_project_status(cls, v: str) -> str:
+        valid = {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
+        if v not in valid:
+            raise ValueError(f"Invalid project status '{v}'. Must be one of: {sorted(valid)}")
+        return v
+
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
     status: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def _valid_project_status(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        valid = {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
+        if v not in valid:
+            raise ValueError(f"Invalid project status '{v}'. Must be one of: {sorted(valid)}")
+        return v
 
 
 class ProjectOut(_Base):
     id: uuid.UUID
     name: str
     status: str
+    is_deleted: bool
     created_at: datetime
     updated_at: datetime
 
@@ -265,6 +295,19 @@ class SubDivisionCreate(BaseModel):
     end_date: Optional[date] = None
     status: str = "PLANNED"
 
+    #_VALID_SD_STATUSES class variable removed — was dead code (Bug #8 fix)
+
+    @field_validator("status")
+    @classmethod
+    def _valid_subdivision_status(cls, v: str) -> str:
+        valid = {"PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"}
+        if v not in valid:
+            raise ValueError(
+                f"Invalid subdivision status '{v}'. "
+                f"Must be one of: {sorted(valid)}"
+            )
+        return v
+
     @model_validator(mode="after")
     def _validate_dates(self) -> "SubDivisionCreate":
         if self.start_date and self.end_date and self.end_date < self.start_date:
@@ -278,6 +321,19 @@ class SubDivisionUpdate(BaseModel):
     end_date: Optional[date] = None
     status: Optional[str] = None
 
+    @field_validator("status")
+    @classmethod
+    def _valid_subdivision_status(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        valid = {"PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"}
+        if v not in valid:
+            raise ValueError(
+                f"Invalid subdivision status '{v}'. "
+                f"Must be one of: {sorted(valid)}"
+            )
+        return v
+
 
 class SubDivisionOut(_Base):
     id: uuid.UUID
@@ -286,6 +342,7 @@ class SubDivisionOut(_Base):
     start_date: Optional[date]
     end_date: Optional[date]
     status: str
+    is_deleted: bool
 
 
 # ===========================================================================
@@ -296,10 +353,60 @@ class BudgetCreate(BaseModel):
     """
     Only the *manual inputs* are accepted from the client.
     All calculated fields are derived server-side by CalculationService.
+
+    Rate overrides (all optional)
+    ------------------------------
+    If provided, each override replaces the corresponding global RateCard value
+    for this budget's calculation only.  Omit or pass ``null`` to use the
+    admin-configured global rate.
     """
     sub_division_id: uuid.UUID
     tc_count: int = Field(..., gt=0, description="Total Test Case count (manual input)")
     duration_in_days: int = Field(..., gt=0, description="Engagement duration in working days")
+
+    # Per-budget rate overrides — all optional
+    manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
+    automation_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
+    adhoc_request_multiplier_override: Optional[float] = Field(default=None, gt=0)
+    working_days_per_week_override: Optional[float] = Field(default=None, gt=0)
+    hrs_per_wk_per_hc_override: Optional[float] = Field(default=None, gt=0)
+    manual_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
+    automation_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
+    hc_rate_card_override: Optional[float] = Field(default=None, gt=0)
+    sqpm_boise_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    pl_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    per_wqe_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    asqpm_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    lab_tech_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    project_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+
+
+class BudgetUpdate(BaseModel):
+    """
+    Schema used exclusively by PATCH /budgets/{id}.
+
+    Deliberately omits ``sub_division_id``: a budget cannot be re-linked to a
+    different SubDivision after creation.  Including it in the PATCH body would
+    be misleading — it would be silently ignored (Bug #7 fix).
+    """
+    tc_count: int = Field(..., gt=0, description="Total Test Case count (manual input)")
+    duration_in_days: int = Field(..., gt=0, description="Engagement duration in working days")
+
+    # Per-budget rate overrides — all optional
+    manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
+    automation_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
+    adhoc_request_multiplier_override: Optional[float] = Field(default=None, gt=0)
+    working_days_per_week_override: Optional[float] = Field(default=None, gt=0)
+    hrs_per_wk_per_hc_override: Optional[float] = Field(default=None, gt=0)
+    manual_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
+    automation_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
+    hc_rate_card_override: Optional[float] = Field(default=None, gt=0)
+    sqpm_boise_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    pl_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    per_wqe_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    asqpm_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    lab_tech_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
+    project_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
 
 
 class BudgetOut(_Base):
@@ -311,13 +418,13 @@ class BudgetOut(_Base):
     duration_in_days: int
 
     # Calculated
-    manual_tc_count: Optional[float]
-    automation_tc_count: Optional[float]
-    adhoc_request: Optional[float]
-    total_tc: Optional[float]
+    manual_tc_count: Optional[int]
+    automation_tc_count: Optional[int]
+    adhoc_request: Optional[int]
+    total_tc: Optional[int]
     duration_wks: Optional[float]
-    manual_hc: Optional[float]
-    automation_hc: Optional[float]
+    manual_hc: Optional[int]
+    automation_hc: Optional[int]
     manual_hc_cost: Optional[float]
     automation_hc_cost: Optional[float]
     lead_cost: Optional[float]
@@ -329,8 +436,43 @@ class BudgetOut(_Base):
     project_manager_cost: Optional[float]
     total_budget: Optional[float]
 
+    # Applied rate overrides (None = global rate was used)
+    manual_tc_multiplier_override: Optional[float]
+    automation_tc_multiplier_override: Optional[float]
+    adhoc_request_multiplier_override: Optional[float]
+    working_days_per_week_override: Optional[float]
+    hrs_per_wk_per_hc_override: Optional[float]
+    manual_hc_divisor_override: Optional[float]
+    automation_hc_divisor_override: Optional[float]
+    hc_rate_card_override: Optional[float]
+    sqpm_boise_pct_override: Optional[float]
+    pl_pct_override: Optional[float]
+    per_wqe_pct_override: Optional[float]
+    asqpm_pct_override: Optional[float]
+    lab_tech_manager_pct_override: Optional[float]
+    project_manager_pct_override: Optional[float]
+
+    is_deleted: bool
+    is_locked: bool
     created_at: datetime
     updated_at: datetime
+
+
+class BudgetSummaryOut(BaseModel):
+    tc_count: int
+    duration_wks: float
+    manual_hc: int
+    automation_hc: int
+    manual_hc_cost: float
+    automation_hc_cost: float
+    lead_cost: float
+    sqpm_cost_boise: float
+    pl_cost: float
+    per_wqe_cost: float
+    asqpm_cost: float
+    lab_tech_manager_cost: float
+    project_manager_cost: float
+    total_budget: float
 
 
 # ===========================================================================

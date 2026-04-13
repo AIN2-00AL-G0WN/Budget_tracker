@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import User
@@ -39,6 +39,25 @@ async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
 async def get_all_users(db: AsyncSession) -> Sequence[User]:
     """Return every user ordered by creation date (oldest first)."""
     result = await db.execute(select(User).order_by(User.created_at))
+    return result.scalars().all()
+
+
+async def count_all_users(db: AsyncSession) -> int:
+    """Return the total count of all users."""
+    result = await db.execute(select(func.count()).select_from(User))
+    return result.scalar_one()
+
+
+async def get_all_users_paginated(
+    db: AsyncSession,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> Sequence[User]:
+    """Return a paginated slice of users ordered by creation date."""
+    result = await db.execute(
+        select(User).order_by(User.created_at).limit(limit).offset(offset)
+    )
     return result.scalars().all()
 
 

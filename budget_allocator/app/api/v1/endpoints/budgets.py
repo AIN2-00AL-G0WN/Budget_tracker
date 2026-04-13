@@ -85,11 +85,17 @@ async def create_budget(
         )
 
     # 3 & 4. Run calculation engine (raises ValueError on bad rate-card config)
+    # Extract per-budget overrides from the payload (only non-None values are active)
+    overrides = {
+        k: v for k, v in payload.model_dump().items()
+        if k.endswith("_override") and v is not None
+    }
     try:
         calculated = await compute_and_get_budget_fields(
             tc_count=payload.tc_count,
             duration_in_days=payload.duration_in_days,
             db=db,
+            overrides=overrides or None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -97,13 +103,14 @@ async def create_budget(
             detail=str(exc),
         )
 
-    # 5. Persist
+    # 5. Persist (write calculated results + the override columns themselves)
     budget = await crud_budget.create_budget(
         db,
         sub_division_id=payload.sub_division_id,
         tc_count=payload.tc_count,
         duration_in_days=payload.duration_in_days,
         calculated_fields=calculated,
+        override_fields=overrides or None,
     )
     logger.info(
         "Budget created by %s for sub_division=%s: total=%.2f",
@@ -143,11 +150,24 @@ async def update_budget(
     if not budget:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
 
+    # Lock guard: prevent any updates on a locked budget
+    if budget.is_locked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot update a locked budget",
+        )
+
+    # Extract per-budget overrides from the payload
+    overrides = {
+        k: v for k, v in payload.model_dump().items()
+        if k.endswith("_override") and v is not None
+    }
     try:
         calculated = await compute_and_get_budget_fields(
             tc_count=payload.tc_count,
             duration_in_days=payload.duration_in_days,
             db=db,
+            overrides=overrides or None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -161,6 +181,7 @@ async def update_budget(
         tc_count=payload.tc_count,
         duration_in_days=payload.duration_in_days,
         calculated_fields=calculated,
+        override_fields=overrides or None,
     )
     logger.info(
         "Budget %s updated by %s: total=%.2f",

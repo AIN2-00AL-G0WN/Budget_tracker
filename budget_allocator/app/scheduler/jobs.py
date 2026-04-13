@@ -49,6 +49,7 @@ async def check_deadline_proximity(db: AsyncSession) -> None:
             SubDivision.end_date <= threshold,
             SubDivision.end_date >= today,
             SubDivision.status == SubDivisionStatus.IN_PROGRESS,
+            SubDivision.is_deleted == False,  # noqa: E712 — Bug #3 fix
         )
     )
     expiring = sd_result.scalars().all()
@@ -91,7 +92,8 @@ async def check_deadline_proximity(db: AsyncSession) -> None:
                     Notification.message.contains(f"SubDivision '{sd.name}'"),
                 )
             )
-            if already_sent.scalar() and already_sent.scalar() > 0:
+            already_sent_count = already_sent.scalar()  # Bug #1 fix: cache scalar, only call once
+            if already_sent_count and already_sent_count > 0:
                 skipped += 1
                 continue
 
@@ -102,6 +104,8 @@ async def check_deadline_proximity(db: AsyncSession) -> None:
 
     if notifications:
         db.add_all(notifications)
+        # The scheduler opens its own session (not via get_db) which does NOT
+        # auto-commit on context-manager exit — we must commit explicitly here.
         await db.commit()
 
     logger.info(

@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.models import Project, SubDivision
+from app.models.models import Budget, Project, SubDivision
 from app.schemas.schemas import ProjectCreate, ProjectUpdate, SubDivisionCreate, SubDivisionUpdate
 
 
@@ -33,9 +33,39 @@ from app.schemas.schemas import ProjectCreate, ProjectUpdate, SubDivisionCreate,
 
 
 async def get_all_projects(db: AsyncSession) -> Sequence[Project]:
-    """Return every project ordered by creation date (oldest first)."""
-    result = await db.execute(select(Project).order_by(Project.created_at))
+    """Return every non-deleted project ordered by creation date (oldest first)."""
+    result = await db.execute(
+        select(Project)
+        .where(Project.is_deleted == False)  # noqa: E712
+        .order_by(Project.created_at)
+    )
     return result.scalars().all()
+
+
+async def get_all_projects_paginated(
+    db: AsyncSession,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> Sequence[Project]:
+    """Return a paginated slice of non-deleted projects."""
+    result = await db.execute(
+        select(Project)
+        .where(Project.is_deleted == False)  # noqa: E712
+        .order_by(Project.created_at)
+        .limit(limit)
+        .offset(offset)
+    )
+    return result.scalars().all()
+
+
+async def count_active_projects(db: AsyncSession) -> int:
+    """Return the total count of non-deleted projects."""
+    from sqlalchemy import func
+    result = await db.execute(
+        select(func.count()).select_from(Project).where(Project.is_deleted == False)  # noqa: E712
+    )
+    return result.scalar_one()
 
 
 async def get_project_by_id(
@@ -54,9 +84,12 @@ async def get_project_by_id(
         ``selectinload`` so the caller can access ``project.sub_divisions``
         without an extra query.
     """
-    stmt = select(Project).where(Project.id == project_id)
+    stmt = select(Project).where(
+        Project.id == project_id,
+        Project.is_deleted == False,  # noqa: E712
+    )
     if load_subdivisions:
-        stmt = stmt.options(selectinload(Project.sub_divisions))
+        stmt = stmt.options(selectinload(Project.sub_divisions.and_(SubDivision.is_deleted == False)))  # noqa: E712
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -99,10 +132,14 @@ async def update_project(
 
 async def delete_project(db: AsyncSession, project: Project) -> None:
     """
-    Delete a Project row (cascades to SubDivisions and their Budgets via
-    the ``ondelete="CASCADE"`` FK constraints defined on the models).
+    Soft-delete a Project by setting is_deleted=True.
+
+    The row and all child data remains in the database for audit purposes.
+    Hard foreign-key cascades are intentionally NOT triggered.
     """
-    await db.delete(project)
+    project.is_deleted = True
+    db.add(project)
+    await db.flush()
 
 
 # ===========================================================================
@@ -110,25 +147,102 @@ async def delete_project(db: AsyncSession, project: Project) -> None:
 # ===========================================================================
 
 
+async def get_project_summary(
+    db: AsyncSession, project_id: uuid.UUID
+) -> dict | None:
+    """
+    Returns aggregated budget stats across all sub-divisions for a given
+    project, returning a dictionary representation of BudgetSummaryOut.
+    """
+    from sqlalchemy import func
+    result = await db.execute(
+        select(
+            func.coalesce(func.sum(Budget.tc_count), 0).label("tc_count"),
+            func.coalesce(func.sum(Budget.duration_wks), 0).label("duration_wks"),
+            func.coalesce(func.sum(Budget.manual_hc), 0).label("manual_hc"),
+            func.coalesce(func.sum(Budget.automation_hc), 0).label("automation_hc"),
+            func.coalesce(func.sum(Budget.manual_hc_cost), 0).label("manual_hc_cost"),
+            func.coalesce(func.sum(Budget.automation_hc_cost), 0).label("automation_hc_cost"),
+            func.coalesce(func.sum(Budget.lead_cost), 0).label("lead_cost"),
+            func.coalesce(func.sum(Budget.sqpm_cost_boise), 0).label("sqpm_cost_boise"),
+            func.coalesce(func.sum(Budget.pl_cost), 0).label("pl_cost"),
+            func.coalesce(func.sum(Budget.per_wqe_cost), 0).label("per_wqe_cost"),
+            func.coalesce(func.sum(Budget.asqpm_cost), 0).label("asqpm_cost"),
+            func.coalesce(func.sum(Budget.lab_tech_manager_cost), 0).label("lab_tech_manager_cost"),
+            func.coalesce(func.sum(Budget.project_manager_cost), 0).label("project_manager_cost"),
+            func.coalesce(func.sum(Budget.total_budget), 0).label("total_budget"),
+        ).join(SubDivision, Budget.sub_division_id == SubDivision.id).where(
+            SubDivision.project_id == project_id,
+            SubDivision.is_deleted == False,  # noqa: E712
+            Budget.is_deleted == False,  # noqa: E712
+        )
+    )
+    row = result.one_or_none()
+    return dict(row._mapping) if row else None
+
+
 async def get_subdivisions_for_project(
     db: AsyncSession,
     project_id: uuid.UUID,
 ) -> Sequence[SubDivision]:
-    """Return all sub-divisions belonging to ``project_id``, ordered by name."""
+    """Return all non-deleted sub-divisions belonging to ``project_id``, ordered by name."""
     result = await db.execute(
         select(SubDivision)
-        .where(SubDivision.project_id == project_id)
+        .where(
+            SubDivision.project_id == project_id,
+            SubDivision.is_deleted == False,  # noqa: E712
+        )
         .order_by(SubDivision.name)
     )
     return result.scalars().all()
+
+
+async def get_subdivisions_for_project_paginated(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> Sequence[SubDivision]:
+    """Return a paginated slice of non-deleted sub-divisions for a project."""
+    result = await db.execute(
+        select(SubDivision)
+        .where(
+            SubDivision.project_id == project_id,
+            SubDivision.is_deleted == False,  # noqa: E712
+        )
+        .order_by(SubDivision.name)
+        .limit(limit)
+        .offset(offset)
+    )
+    return result.scalars().all()
+
+
+async def count_active_subdivisions_for_project(
+    db: AsyncSession, project_id: uuid.UUID
+) -> int:
+    """Return the total count of non-deleted subdivisions for a project."""
+    from sqlalchemy import func
+    result = await db.execute(
+        select(func.count()).select_from(SubDivision).where(
+            SubDivision.project_id == project_id,
+            SubDivision.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one()
 
 
 async def get_subdivision_by_id(
     db: AsyncSession,
     sd_id: uuid.UUID,
 ) -> SubDivision | None:
-    """Fetch a single SubDivision by primary key."""
-    result = await db.execute(select(SubDivision).where(SubDivision.id == sd_id))
+    """Fetch a single non-deleted SubDivision by primary key."""
+    result = await db.execute(
+        select(SubDivision).where(
+            SubDivision.id == sd_id,
+            SubDivision.is_deleted == False,  # noqa: E712
+        )
+    )
     return result.scalar_one_or_none()
 
 
@@ -158,13 +272,30 @@ async def update_subdivision(
     payload: SubDivisionUpdate,
 ) -> SubDivision:
     """Apply a partial update to an already-fetched SubDivision ORM object."""
+    from app.models.models import SubDivisionStatus, Budget
+    from sqlalchemy import select
+
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(sd, field, value)
+
+    # Auto-lock budget if subdivision is marked COMPLETED
+    if getattr(sd, "status", None) == SubDivisionStatus.COMPLETED:
+        budget_result = await db.execute(
+            select(Budget).where(Budget.sub_division_id == sd.id)
+        )
+        budget = budget_result.scalar_one_or_none()
+        if budget:
+            budget.is_locked = True
+            db.add(budget)
+
     db.add(sd)
-    await db.flush()   # Fix #15: flush so updated_at is set by DB
+    await db.flush()            # Trigger UPDATE; DB sets updated_at
+    await db.refresh(sd)        # Bug #6 fix: reload updated_at before returning
     return sd
 
 
 async def delete_subdivision(db: AsyncSession, sd: SubDivision) -> None:
-    """Delete a SubDivision row (cascades to its Budget)."""
-    await db.delete(sd)
+    """Soft-delete a SubDivision by setting is_deleted=True."""
+    sd.is_deleted = True
+    db.add(sd)
+    await db.flush()
