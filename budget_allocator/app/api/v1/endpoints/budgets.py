@@ -15,7 +15,9 @@ from __future__ import annotations
 import logging
 import uuid
 
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
@@ -32,6 +34,7 @@ from app.schemas.schemas import (
 )
 from app.api.dependencies.filters import BudgetFilterParams, get_budget_filters
 from app.services.calculation_service import compute_and_get_budget_fields
+from app.services import export_service
 
 router = APIRouter(tags=["budgets"])
 logger = logging.getLogger(__name__)
@@ -153,6 +156,27 @@ async def list_budgets(
     total = await crud_budget.count_active_budgets(db, test_run_id=test_run_id, filters=filters)
     items = await crud_budget.get_budgets_paginated(db, test_run_id=test_run_id, filters=filters, limit=limit, offset=offset)
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+@router.get("/budgets/export")
+async def export_budgets(
+    test_run_id: uuid.UUID | None = Query(None, description="Filter by parent test run ID"),
+    filters: BudgetFilterParams = Depends(get_budget_filters),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    items = await crud_budget.get_budgets_paginated(db, test_run_id=test_run_id, filters=filters, limit=10000, offset=0)
+    buffer = export_service.generate_excel_export(list(items))
+    
+    filename = f"Budget_Export_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    
+    headers = {
+        "Content-Disposition": f"attachment; filename={filename}"
+    }
+    return StreamingResponse(
+        buffer, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
+    )
 
 @router.get("/budgets/{budget_id}", response_model=BudgetOut)
 async def get_budget(

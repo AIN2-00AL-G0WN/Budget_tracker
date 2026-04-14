@@ -418,8 +418,8 @@ class Budget(Base):
     )
 
     # ---- Manual Inputs (provided by the manager) ----------------------------
-    tc_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    duration_in_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    tc_count: Mapped[float] = mapped_column(Float, nullable=False)
+    duration_in_days: Mapped[float] = mapped_column(Float, nullable=False)
 
     # ---- Calculated Fields (written exclusively by CalculationService) ------
     manual_tc_count: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -451,7 +451,13 @@ class Budget(Base):
     hrs_per_wk_per_hc_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     manual_hc_divisor_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     automation_hc_divisor_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    hc_rate_card_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    manual_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    automation_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    asqpm_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lead_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pm_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     sqpm_boise_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pl_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     per_wqe_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -546,6 +552,26 @@ class RateCard(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<RateCard key={self.key_name!r} value={self.value}>"
+
+
+# ===========================================================================
+# Company Holidays  (Used for working day math)
+# ===========================================================================
+
+class CompanyHoliday(Base):
+    """
+    Tracks company observing holidays to calculate accurate
+    business delivery / resource headcount math.
+    """
+    __tablename__ = "company_holidays"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    holiday_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False, index=True)
+    description: Mapped[str] = mapped_column(String(256), nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<CompanyHoliday id={self.id} date={self.holiday_date}>"
 
 
 # ===========================================================================

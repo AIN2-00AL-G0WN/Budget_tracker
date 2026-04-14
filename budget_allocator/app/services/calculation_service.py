@@ -123,8 +123,8 @@ def _D(value: int | float) -> Decimal:
 
 def calculate_budget(
     *,
-    tc_count: int,
-    duration_in_days: int,
+    tc_count: float,
+    duration_in_days: float,
     rates: dict[str, float],
     overrides: dict[str, float | None] | None = None,
 ) -> dict[str, Any]:
@@ -180,9 +180,9 @@ def calculate_budget(
     # ------------------------------------------------------------------
     # Step 1: TC decomposition
     # ------------------------------------------------------------------
-    manual_tc: Decimal = _D(math.ceil(tc * _rate("manual_tc_multiplier", "manual_tc_multiplier_override")))
-    automation_tc: Decimal = _D(math.ceil(tc * _rate("automation_tc_multiplier", "automation_tc_multiplier_override")))
-    adhoc: Decimal = _D(math.ceil(tc * _rate("adhoc_request_multiplier", "adhoc_request_multiplier_override")))
+    manual_tc: Decimal = tc * _rate("manual_tc_multiplier", "manual_tc_multiplier_override")
+    automation_tc: Decimal = tc * _rate("automation_tc_multiplier", "automation_tc_multiplier_override")
+    adhoc: Decimal = tc * _rate("adhoc_request_multiplier", "adhoc_request_multiplier_override")
     total_tc: Decimal = manual_tc + automation_tc + adhoc         # =SUM(C5:C7)
 
     # ------------------------------------------------------------------
@@ -194,43 +194,49 @@ def calculate_budget(
     # Step 3: Headcount (HC)
     # ------------------------------------------------------------------
     # Manual HC: =SUM(manual_tc, total_tc) / (duration_wks * manual_hc_divisor)
-    manual_hc: Decimal = _D(math.ceil((manual_tc + total_tc) / (duration_wks * _rate("manual_hc_divisor", "manual_hc_divisor_override"))))
+    manual_hc: Decimal = (manual_tc + total_tc) / (duration_wks * _rate("manual_hc_divisor", "manual_hc_divisor_override"))
 
     # Automation HC: =automation_tc / automation_hc_divisor
-    automation_hc: Decimal = _D(math.ceil(automation_tc / _rate("automation_hc_divisor", "automation_hc_divisor_override")))
+    automation_hc: Decimal = automation_tc / _rate("automation_hc_divisor", "automation_hc_divisor_override")
 
     # ------------------------------------------------------------------
     # Step 4: Cost lines  (all: HC_count * hrs_per_week * rate * duration_wks)
     # ------------------------------------------------------------------
-    hc_rate = _rate("hc_rate_card", "hc_rate_card_override")
     hrs = _rate("hrs_per_wk_per_hc", "hrs_per_wk_per_hc_override")
+    global_rate = _D(rates["hc_rate_card"])
+
+    manual_rate = _rate("hc_rate_card", "manual_hourly_rate_override")
+    automation_rate = _rate("hc_rate_card", "automation_hourly_rate_override")
+    lead_rate = _rate("hc_rate_card", "lead_hourly_rate_override")
+    asqpm_rate = _rate("hc_rate_card", "asqpm_hourly_rate_override")
+    pm_rate = _rate("hc_rate_card", "pm_hourly_rate_override")
 
     # Row 13: Manual HC Cost  = manual_hc * 40hr * rate * duration_wks
-    manual_hc_cost: Decimal = manual_hc * hrs * hc_rate * duration_wks
+    manual_hc_cost: Decimal = manual_hc * hrs * manual_rate * duration_wks
 
     # Row 14: Automation HC Cost
-    automation_hc_cost: Decimal = automation_hc * hrs * hc_rate * duration_wks
+    automation_hc_cost: Decimal = automation_hc * hrs * automation_rate * duration_wks
 
     # Row 15: Lead Cost  = 1 lead * 40hr * rate * duration_wks
-    lead_cost: Decimal = _D(1) * hrs * hc_rate * duration_wks
+    lead_cost: Decimal = _D(1) * hrs * lead_rate * duration_wks
 
     # Row 16: SQPM Cost of Boise 70%  = hc_rate * duration_wks * 0.7 * hrs
-    sqpm_cost_boise: Decimal = hrs * hc_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
+    sqpm_cost_boise: Decimal = hrs * global_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
 
     # Row 17: PL 50%
-    pl_cost: Decimal = hrs * hc_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
+    pl_cost: Decimal = hrs * global_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
 
     # Row 18: Per WQE 40%  — note Excel uses factor of 6 WQE resources
-    per_wqe_cost: Decimal = _D(6) * hrs * hc_rate * duration_wks * _rate("per_wqe_pct", "per_wqe_pct_override")
+    per_wqe_cost: Decimal = _D(6) * hrs * global_rate * duration_wks * _rate("per_wqe_pct", "per_wqe_pct_override")
 
     # Row 19: aSQPM 80%
-    asqpm_cost: Decimal = hrs * hc_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
+    asqpm_cost: Decimal = hrs * asqpm_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
 
     # Row 20: Lab Tech & Manager 40%  — note Excel uses factor of 2 resources
-    lab_tech_manager_cost: Decimal = _D(2) * hrs * hc_rate * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
+    lab_tech_manager_cost: Decimal = _D(2) * hrs * global_rate * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
 
     # Row 21: Project Manager 40%
-    project_manager_cost: Decimal = hrs * hc_rate * duration_wks * _rate("project_manager_pct", "project_manager_pct_override")
+    project_manager_cost: Decimal = hrs * pm_rate * duration_wks * _rate("project_manager_pct", "project_manager_pct_override")
 
     # ------------------------------------------------------------------
     # Step 5: Total Budget  (sum of all cost rows 13-21)
@@ -262,15 +268,15 @@ def calculate_budget(
         return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     return {
-        "tc_count":             tc_count,
-        "duration_in_days":     duration_in_days,
-        "manual_tc_count":      int(manual_tc),
-        "automation_tc_count":  int(automation_tc),
-        "adhoc_request":        int(adhoc),
-        "total_tc":             int(total_tc),
+        "tc_count":             float(tc_count),
+        "duration_in_days":     float(duration_in_days),
+        "manual_tc_count":      _r2(manual_tc),
+        "automation_tc_count":  _r2(automation_tc),
+        "adhoc_request":        _r2(adhoc),
+        "total_tc":             _r2(total_tc),
         "duration_wks":         _r4(duration_wks),
-        "manual_hc":            int(manual_hc),
-        "automation_hc":        int(automation_hc),
+        "manual_hc":            _r2(manual_hc),
+        "automation_hc":        _r2(automation_hc),
         "manual_hc_cost":       _r2(manual_hc_cost),
         "automation_hc_cost":   _r2(automation_hc_cost),
         "lead_cost":            _r2(lead_cost),
@@ -287,8 +293,8 @@ def calculate_budget(
 
 async def compute_and_get_budget_fields(
     *,
-    tc_count: int,
-    duration_in_days: int,
+    tc_count: float,
+    duration_in_days: float,
     db: AsyncSession,
     overrides: dict[str, float | None] | None = None,
 ) -> dict[str, Any]:

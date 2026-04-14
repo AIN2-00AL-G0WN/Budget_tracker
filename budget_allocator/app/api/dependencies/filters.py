@@ -23,7 +23,7 @@ class AuditFilterParams(BaseModel):
 class BudgetFilterParams(BaseModel):
     min_total_cost: float | None = Field(default=None, description="Minimum total budget cost")
     max_total_cost: float | None = Field(default=None, description="Maximum total budget cost")
-    min_headcount: int | None = Field(default=None, description="Minimum manual headcount")
+    min_headcount: float | None = Field(default=None, description="Minimum manual headcount")
     has_overrides: bool | None = Field(default=None, description="Only show budgets with non-null overrides")
     is_locked: bool | None = Field(default=None, description="Filter by locked status")
 
@@ -50,7 +50,7 @@ def get_audit_filters(
 def get_budget_filters(
     min_total_cost: float | None = Query(None, description="Min total budget"),
     max_total_cost: float | None = Query(None, description="Max total budget"),
-    min_headcount: int | None = Query(None, description="Min manual headcount"),
+    min_headcount: float | None = Query(None, description="Min manual headcount"),
     has_overrides: bool | None = Query(None, description="Budgets with rate overrides"),
     is_locked: bool | None = Query(None, description="Locked status"),
 ) -> BudgetFilterParams:

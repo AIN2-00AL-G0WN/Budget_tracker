@@ -196,7 +196,10 @@ async def update_budget(
         "manual_tc_multiplier_override", "automation_tc_multiplier_override",
         "adhoc_request_multiplier_override", "working_days_per_week_override",
         "hrs_per_wk_per_hc_override", "manual_hc_divisor_override",
-        "automation_hc_divisor_override", "hc_rate_card_override",
+        "automation_hc_divisor_override", 
+        "manual_hourly_rate_override", "automation_hourly_rate_override",
+        "asqpm_hourly_rate_override", "lead_hourly_rate_override",
+        "pm_hourly_rate_override",
         "sqpm_boise_pct_override", "pl_pct_override", "per_wqe_pct_override",
         "asqpm_pct_override", "lab_tech_manager_pct_override", "project_manager_pct_override",
     ]

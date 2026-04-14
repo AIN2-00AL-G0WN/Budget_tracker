@@ -384,9 +384,9 @@ class BudgetCreate(BaseModel):
     for this budget's calculation only.  Omit or pass ``null`` to use the
     admin-configured global rate.
     """
-    test_run_id: uuid.UUID
-    tc_count: Optional[int] = Field(default=None, gt=0, description="Total Test Case count (manual input)")
-    duration_in_days: Optional[int] = Field(default=None, gt=0, description="Engagement duration in working days")
+    test_run_id: Optional[uuid.UUID] = Field(default=None, description="FK to parent TestRun")
+    tc_count: Optional[float] = Field(default=None, gt=0, description="Total Test Case count (manual input)")
+    duration_in_days: Optional[float] = Field(default=None, gt=0, description="Engagement duration in working days")
 
     # Per-budget rate overrides — all optional
     manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
@@ -396,7 +396,11 @@ class BudgetCreate(BaseModel):
     hrs_per_wk_per_hc_override: Optional[float] = Field(default=None, gt=0)
     manual_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
     automation_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
-    hc_rate_card_override: Optional[float] = Field(default=None, gt=0)
+    manual_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    automation_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    asqpm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    lead_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    pm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     sqpm_boise_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     pl_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     per_wqe_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
@@ -413,8 +417,9 @@ class BudgetUpdate(BaseModel):
     different TestRun after creation.  Including it in the PATCH body would
     be misleading.
     """
-    tc_count: int = Field(..., gt=0, description="Total Test Case count (manual input)")
-    duration_in_days: int = Field(..., gt=0, description="Engagement duration in working days")
+    test_run_id: uuid.UUID = Field(..., description="Bind this budget to a TestRun")
+    tc_count: float = Field(..., gt=0, description="Total Test Case count (manual input)")
+    duration_in_days: float = Field(..., gt=0, description="Engagement duration in working days")
 
     # Per-budget rate overrides — all optional
     manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
@@ -424,7 +429,11 @@ class BudgetUpdate(BaseModel):
     hrs_per_wk_per_hc_override: Optional[float] = Field(default=None, gt=0)
     manual_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
     automation_hc_divisor_override: Optional[float] = Field(default=None, gt=0)
-    hc_rate_card_override: Optional[float] = Field(default=None, gt=0)
+    manual_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    automation_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    asqpm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    lead_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    pm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     sqpm_boise_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     pl_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     per_wqe_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
@@ -438,17 +447,17 @@ class BudgetOut(_Base):
     test_run_id: uuid.UUID
 
     # Inputs
-    tc_count: int
-    duration_in_days: int
+    tc_count: float
+    duration_in_days: float
 
     # Calculated
-    manual_tc_count: Optional[int]
-    automation_tc_count: Optional[int]
-    adhoc_request: Optional[int]
-    total_tc: Optional[int]
+    manual_tc_count: Optional[float]
+    automation_tc_count: Optional[float]
+    adhoc_request: Optional[float]
+    total_tc: Optional[float]
     duration_wks: Optional[float]
-    manual_hc: Optional[int]
-    automation_hc: Optional[int]
+    manual_hc: Optional[float]
+    automation_hc: Optional[float]
     manual_hc_cost: Optional[float]
     automation_hc_cost: Optional[float]
     lead_cost: Optional[float]
@@ -468,7 +477,11 @@ class BudgetOut(_Base):
     hrs_per_wk_per_hc_override: Optional[float]
     manual_hc_divisor_override: Optional[float]
     automation_hc_divisor_override: Optional[float]
-    hc_rate_card_override: Optional[float]
+    manual_hourly_rate_override: Optional[float]
+    automation_hourly_rate_override: Optional[float]
+    asqpm_hourly_rate_override: Optional[float]
+    lead_hourly_rate_override: Optional[float]
+    pm_hourly_rate_override: Optional[float]
     sqpm_boise_pct_override: Optional[float]
     pl_pct_override: Optional[float]
     per_wqe_pct_override: Optional[float]
@@ -483,10 +496,10 @@ class BudgetOut(_Base):
 
 
 class BudgetSummaryOut(BaseModel):
-    tc_count: int
+    tc_count: float
     duration_wks: float
-    manual_hc: int
-    automation_hc: int
+    manual_hc: float
+    automation_hc: float
     manual_hc_cost: float
     automation_hc_cost: float
     lead_cost: float
@@ -504,11 +517,11 @@ class FullSummarySnapshotOut(BudgetSummaryOut):
     Complete copy of all numeric fields from the budget, for audit records.
     Includes rate overrides.
     """
-    duration_in_days: int
-    manual_tc_count: Optional[int]
-    automation_tc_count: Optional[int]
-    adhoc_request: Optional[int]
-    total_tc: Optional[int]
+    duration_in_days: float
+    manual_tc_count: Optional[float]
+    automation_tc_count: Optional[float]
+    adhoc_request: Optional[float]
+    total_tc: Optional[float]
     
     manual_tc_multiplier_override: Optional[float]
     automation_tc_multiplier_override: Optional[float]
@@ -517,7 +530,11 @@ class FullSummarySnapshotOut(BudgetSummaryOut):
     hrs_per_wk_per_hc_override: Optional[float]
     manual_hc_divisor_override: Optional[float]
     automation_hc_divisor_override: Optional[float]
-    hc_rate_card_override: Optional[float]
+    manual_hourly_rate_override: Optional[float]
+    automation_hourly_rate_override: Optional[float]
+    asqpm_hourly_rate_override: Optional[float]
+    lead_hourly_rate_override: Optional[float]
+    pm_hourly_rate_override: Optional[float]
     sqpm_boise_pct_override: Optional[float]
     pl_pct_override: Optional[float]
     per_wqe_pct_override: Optional[float]
@@ -581,6 +598,24 @@ class RateCardOut(_Base):
     description: Optional[str]
     updated_at: datetime
 
+
+# ===========================================================================
+# Company Holiday schemas
+# ===========================================================================
+
+class CompanyHolidayCreate(BaseModel):
+    holiday_date: date
+    description: str = Field(..., min_length=2, max_length=256)
+
+class CompanyHolidayUpdate(BaseModel):
+    holiday_date: Optional[date] = None
+    description: Optional[str] = Field(default=None, min_length=2, max_length=256)
+
+class CompanyHolidayOut(_Base):
+    id: int
+    holiday_date: date
+    description: str
+    is_deleted: bool
 
 # ===========================================================================
 # Audit Log schemas
