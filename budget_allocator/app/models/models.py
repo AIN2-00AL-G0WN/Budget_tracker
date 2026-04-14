@@ -336,6 +336,8 @@ class TestRun(Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False, index=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     is_deleted: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
@@ -598,6 +600,11 @@ class AuditLog(Base):
         nullable=False,
         index=True,
         comment="SQLAlchemy model class name, e.g. 'Budget', 'RateCard'",
+    )
+    change_reason: Mapped[Optional[str]] = mapped_column(
+        String,
+        nullable=True,
+        comment="Mandatory comment for modifications",
     )
     entity_id: Mapped[str] = mapped_column(
         String(64),

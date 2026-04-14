@@ -32,3 +32,9 @@ current_user_id: ContextVar[Optional[uuid.UUID]] = ContextVar(
     "current_user_id",
     default=None,
 )
+
+# Holds mandatory audit reasons injected from API controllers boundaries
+current_change_reason: ContextVar[Optional[str]] = ContextVar(
+    "current_change_reason",
+    default=None,
+)

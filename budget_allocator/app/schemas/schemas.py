@@ -358,6 +358,7 @@ class TestRunCreate(BaseModel):
 
 class TestRunUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
+    change_reason: str = Field(..., min_length=5, description="Mandatory reason for this change")
 
 
 class TestRunOut(_Base):
@@ -420,6 +421,7 @@ class BudgetUpdate(BaseModel):
     test_run_id: uuid.UUID = Field(..., description="Bind this budget to a TestRun")
     tc_count: float = Field(..., gt=0, description="Total Test Case count (manual input)")
     duration_in_days: float = Field(..., gt=0, description="Engagement duration in working days")
+    change_reason: str = Field(..., min_length=5, description="Mandatory reason for this change")
 
     # Per-budget rate overrides — all optional
     manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)

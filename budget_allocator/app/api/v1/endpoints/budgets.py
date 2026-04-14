@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
+from app.core.context import current_change_reason
 from app.core.database import get_db
 from app.crud import crud_budget, crud_notification, crud_test_run
 from app.models.models import User
@@ -214,6 +215,8 @@ async def update_budget(
             detail="Cannot update a locked budget",
         )
 
+    current_change_reason.set(payload.change_reason)
+
     # Extract per-budget overrides from the payload
     overrides = {
         k: v for k, v in payload.model_dump().items()
@@ -249,12 +252,15 @@ async def update_budget(
 @router.delete("/budgets/{budget_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_budget(
     budget_id: uuid.UUID,
+    reason: str = Query(..., min_length=5, description="Mandatory audit explanation"),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     budget = await crud_budget.get_budget_by_id(db, budget_id)
     if not budget:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
+        
+    current_change_reason.set(reason)
     await crud_budget.delete_budget(db, budget)
     return Response(status_code=204)
 

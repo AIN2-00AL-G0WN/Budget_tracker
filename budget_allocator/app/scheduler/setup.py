@@ -19,6 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.database import AsyncSessionLocal
 from app.scheduler.jobs import check_deadline_proximity
+from app.tasks.sweeper import sweep_expired_runs
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,12 @@ async def _run_deadline_check() -> None:
             await check_deadline_proximity(db=session)
         except Exception:
             logger.exception("Deadline check job failed")
+            
+async def _run_sweeper_check() -> None:
+    try:
+        await sweep_expired_runs()
+    except Exception:
+        logger.exception("Sweeper check job failed")
 
 
 def configure_jobs() -> None:
@@ -44,6 +51,13 @@ def configure_jobs() -> None:
         name="SubDivision deadline proximity alert",
         replace_existing=True,
         misfire_grace_time=3600,   # Allow up to 1h late execution on restart
+    )
+    scheduler.add_job(
+        _run_sweeper_check,
+        trigger=CronTrigger(hour=0, minute=0),
+        id="sweeper_check",
+        name="Mark Expired TestRuns as OVERDUE",
+        replace_existing=True,
     )
     logger.info("Scheduled jobs configured")
 

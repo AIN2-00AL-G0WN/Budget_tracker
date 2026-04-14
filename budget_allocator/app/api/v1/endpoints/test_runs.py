@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_admin_user, get_current_user
+from app.core.context import current_change_reason
 from app.core.database import get_db
 from app.crud import crud_project, crud_test_run
 from app.models.models import User
@@ -79,6 +80,8 @@ async def update_test_run(
     tr = await crud_test_run.get_test_run_by_id(db, test_run_id)
     if not tr:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TestRun not found")
+        
+    current_change_reason.set(payload.change_reason)
     tr = await crud_test_run.update_test_run(db, tr, payload)
     return tr
 
@@ -86,11 +89,14 @@ async def update_test_run(
 @router.delete("/{test_run_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_test_run(
     test_run_id: uuid.UUID,
+    reason: str = Query(..., min_length=5, description="Mandatory audit explanation"),
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     tr = await crud_test_run.get_test_run_by_id(db, test_run_id)
     if not tr:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TestRun not found")
+        
+    current_change_reason.set(reason)
     await crud_test_run.delete_test_run(db, tr)
     return Response(status_code=204)

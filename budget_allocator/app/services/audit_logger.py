@@ -42,7 +42,7 @@ from app.models.models import (
     RateCard,
     SubDivision,
 )
-from app.core.context import current_user_id   # Fix #10: request-scoped actor ID
+from app.core.context import current_user_id, current_change_reason   # Fix #10: request-scoped actor ID
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,7 @@ def _write_audit_row(
         old_value=old_value,
         new_value=new_value,
         user_id=current_user_id.get(),   # Fix #10: populated from request context
+        change_reason=current_change_reason.get(),
     )
     connection.execute(stmt)
 
