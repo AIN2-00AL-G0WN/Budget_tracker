@@ -272,16 +272,20 @@ async def delete_rate_card(
 # ===========================================================================
 
 
+from app.api.dependencies.filters import AuditFilterParams, get_audit_filters
+
+
 @router.get("/audit-logs", response_model=list[AuditLogOut])
 async def get_audit_logs(
     entity_type: str | None = Query(default=None),
     entity_id: str | None = Query(default=None),
+    filters: AuditFilterParams = Depends(get_audit_filters),
     limit: int = Query(default=50, le=500),
     offset: int = Query(default=0, ge=0),
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditLogOut]:
-    """Return audit logs, optionally filtered by entity type / ID."""
+    """Return audit logs, optionally filtered by entity type / ID and action/actor."""
     return await crud_audit.get_audit_logs(
-        db, entity_type=entity_type, entity_id=entity_id, limit=limit, offset=offset
+        db, entity_type=entity_type, entity_id=entity_id, filters=filters, limit=limit, offset=offset
     )  # type: ignore[return-value]

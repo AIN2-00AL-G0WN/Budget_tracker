@@ -246,6 +246,7 @@ class ResetLinkResponse(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=256)
+    business_unit: str = Field(..., min_length=2, max_length=128)
     status: str = "ACTIVE"
 
     @field_validator("status")
@@ -259,6 +260,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
+    business_unit: Optional[str] = Field(default=None, min_length=2, max_length=128)
     status: Optional[str] = None
 
     @field_validator("status")
@@ -275,6 +277,7 @@ class ProjectUpdate(BaseModel):
 class ProjectOut(_Base):
     id: uuid.UUID
     name: str
+    business_unit: str
     status: str
     is_deleted: bool
     created_at: datetime
@@ -282,10 +285,10 @@ class ProjectOut(_Base):
 
 
 # ===========================================================================
-# SubDivision schemas
+# Team schemas (formerly SubDivision)
 # ===========================================================================
 
-class SubDivisionCreate(BaseModel):
+class TeamCreate(BaseModel):
     """
     ``project_id`` is intentionally absent — it is taken from the URL path
     parameter in the router to avoid body/path discrepancies (Fix #7).
@@ -309,13 +312,13 @@ class SubDivisionCreate(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_dates(self) -> "SubDivisionCreate":
+    def _validate_dates(self) -> "TeamCreate":
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
         return self
 
 
-class SubDivisionUpdate(BaseModel):
+class TeamUpdate(BaseModel):
     name: Optional[str] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
@@ -335,7 +338,7 @@ class SubDivisionUpdate(BaseModel):
         return v
 
 
-class SubDivisionOut(_Base):
+class TeamOut(_Base):
     id: uuid.UUID
     project_id: uuid.UUID
     name: str
@@ -343,6 +346,27 @@ class SubDivisionOut(_Base):
     end_date: Optional[date]
     status: str
     is_deleted: bool
+
+
+# ===========================================================================
+# TestRun schemas
+# ===========================================================================
+
+class TestRunCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=256)
+
+
+class TestRunUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=256)
+
+
+class TestRunOut(_Base):
+    id: uuid.UUID
+    sub_division_id: uuid.UUID
+    name: str
+    is_deleted: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 # ===========================================================================
@@ -360,9 +384,9 @@ class BudgetCreate(BaseModel):
     for this budget's calculation only.  Omit or pass ``null`` to use the
     admin-configured global rate.
     """
-    sub_division_id: uuid.UUID
-    tc_count: int = Field(..., gt=0, description="Total Test Case count (manual input)")
-    duration_in_days: int = Field(..., gt=0, description="Engagement duration in working days")
+    test_run_id: uuid.UUID
+    tc_count: Optional[int] = Field(default=None, gt=0, description="Total Test Case count (manual input)")
+    duration_in_days: Optional[int] = Field(default=None, gt=0, description="Engagement duration in working days")
 
     # Per-budget rate overrides — all optional
     manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
@@ -385,9 +409,9 @@ class BudgetUpdate(BaseModel):
     """
     Schema used exclusively by PATCH /budgets/{id}.
 
-    Deliberately omits ``sub_division_id``: a budget cannot be re-linked to a
-    different SubDivision after creation.  Including it in the PATCH body would
-    be misleading — it would be silently ignored (Bug #7 fix).
+    Deliberately omits ``test_run_id``: a budget cannot be re-linked to a
+    different TestRun after creation.  Including it in the PATCH body would
+    be misleading.
     """
     tc_count: int = Field(..., gt=0, description="Total Test Case count (manual input)")
     duration_in_days: int = Field(..., gt=0, description="Engagement duration in working days")
@@ -411,7 +435,7 @@ class BudgetUpdate(BaseModel):
 
 class BudgetOut(_Base):
     id: uuid.UUID
-    sub_division_id: uuid.UUID
+    test_run_id: uuid.UUID
 
     # Inputs
     tc_count: int
@@ -473,6 +497,33 @@ class BudgetSummaryOut(BaseModel):
     lab_tech_manager_cost: float
     project_manager_cost: float
     total_budget: float
+
+
+class FullSummarySnapshotOut(BudgetSummaryOut):
+    """
+    Complete copy of all numeric fields from the budget, for audit records.
+    Includes rate overrides.
+    """
+    duration_in_days: int
+    manual_tc_count: Optional[int]
+    automation_tc_count: Optional[int]
+    adhoc_request: Optional[int]
+    total_tc: Optional[int]
+    
+    manual_tc_multiplier_override: Optional[float]
+    automation_tc_multiplier_override: Optional[float]
+    adhoc_request_multiplier_override: Optional[float]
+    working_days_per_week_override: Optional[float]
+    hrs_per_wk_per_hc_override: Optional[float]
+    manual_hc_divisor_override: Optional[float]
+    automation_hc_divisor_override: Optional[float]
+    hc_rate_card_override: Optional[float]
+    sqpm_boise_pct_override: Optional[float]
+    pl_pct_override: Optional[float]
+    per_wqe_pct_override: Optional[float]
+    asqpm_pct_override: Optional[float]
+    lab_tech_manager_pct_override: Optional[float]
+    project_manager_pct_override: Optional[float]
 
 
 # ===========================================================================

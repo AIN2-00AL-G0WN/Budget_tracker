@@ -158,7 +158,11 @@ def _make_listeners(model_class: type) -> None:
         if not changed:
             return   # No-op flush (e.g. relationship cascade)
         old_val = {k: v[0] for k, v in changed.items()}
-        new_val = {k: v[1] for k, v in changed.items()}
+        if entity_name == "Budget":
+            new_val = _instance_to_dict(target)
+        else:
+            new_val = {k: v[1] for k, v in changed.items()}
+            
         logger.debug("AUDIT UPDATE %s id=%s cols=%s", entity_name, _pk_to_str(target), list(changed))
         _write_audit_row(
             connection,

@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.models import Budget, Project, SubDivision
-from app.schemas.schemas import ProjectCreate, ProjectUpdate, SubDivisionCreate, SubDivisionUpdate
+from app.schemas.schemas import ProjectCreate, ProjectUpdate, TeamCreate, TeamUpdate
+from app.api.dependencies.filters import WorkflowFilterParams
 
 
 # ===========================================================================
@@ -32,39 +33,46 @@ from app.schemas.schemas import ProjectCreate, ProjectUpdate, SubDivisionCreate,
 # ===========================================================================
 
 
-async def get_all_projects(db: AsyncSession) -> Sequence[Project]:
+async def get_all_projects(
+    db: AsyncSession,
+    *,
+    load_subdivisions: bool = False,
+) -> Sequence[Project]:
     """Return every non-deleted project ordered by creation date (oldest first)."""
-    result = await db.execute(
-        select(Project)
-        .where(Project.is_deleted == False)  # noqa: E712
-        .order_by(Project.created_at)
-    )
+    stmt = select(Project).where(Project.is_deleted == False)  # noqa: E712
+    if load_subdivisions:
+        stmt = stmt.options(selectinload(Project.sub_divisions.and_(SubDivision.is_deleted == False)))
+    stmt = stmt.order_by(Project.created_at)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 
 async def get_all_projects_paginated(
     db: AsyncSession,
     *,
+    business_unit: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    load_subdivisions: bool = False,
 ) -> Sequence[Project]:
     """Return a paginated slice of non-deleted projects."""
-    result = await db.execute(
-        select(Project)
-        .where(Project.is_deleted == False)  # noqa: E712
-        .order_by(Project.created_at)
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = select(Project).where(Project.is_deleted == False)
+    if business_unit:
+        stmt = stmt.where(Project.business_unit == business_unit)
+    if load_subdivisions:
+        stmt = stmt.options(selectinload(Project.sub_divisions.and_(SubDivision.is_deleted == False)))
+    stmt = stmt.order_by(Project.created_at).limit(limit).offset(offset)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 
-async def count_active_projects(db: AsyncSession) -> int:
+async def count_active_projects(db: AsyncSession, business_unit: str | None = None) -> int:
     """Return the total count of non-deleted projects."""
     from sqlalchemy import func
-    result = await db.execute(
-        select(func.count()).select_from(Project).where(Project.is_deleted == False)  # noqa: E712
-    )
+    stmt = select(func.count()).select_from(Project).where(Project.is_deleted == False)
+    if business_unit:
+        stmt = stmt.where(Project.business_unit == business_unit)
+    result = await db.execute(stmt)
     return result.scalar_one()
 
 
@@ -143,7 +151,7 @@ async def delete_project(db: AsyncSession, project: Project) -> None:
 
 
 # ===========================================================================
-# SubDivisions
+# Teams (SubDivisions)
 # ===========================================================================
 
 
@@ -181,62 +189,59 @@ async def get_project_summary(
     return dict(row._mapping) if row else None
 
 
-async def get_subdivisions_for_project(
-    db: AsyncSession,
-    project_id: uuid.UUID,
-) -> Sequence[SubDivision]:
-    """Return all non-deleted sub-divisions belonging to ``project_id``, ordered by name."""
-    result = await db.execute(
-        select(SubDivision)
-        .where(
-            SubDivision.project_id == project_id,
-            SubDivision.is_deleted == False,  # noqa: E712
-        )
-        .order_by(SubDivision.name)
-    )
-    return result.scalars().all()
+def _apply_workflow_filters(stmt, filters: WorkflowFilterParams):
+    from app.models.models import Project
+    if filters.status:
+        stmt = stmt.where(SubDivision.status == filters.status)
+    if filters.business_unit:
+        stmt = stmt.join(Project, Project.id == SubDivision.project_id)
+        stmt = stmt.where(Project.business_unit == filters.business_unit)
+    return stmt
 
-
-async def get_subdivisions_for_project_paginated(
+async def get_teams_paginated(
     db: AsyncSession,
-    project_id: uuid.UUID,
     *,
+    project_id: uuid.UUID | None = None,
+    filters: WorkflowFilterParams | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Sequence[SubDivision]:
-    """Return a paginated slice of non-deleted sub-divisions for a project."""
-    result = await db.execute(
-        select(SubDivision)
-        .where(
-            SubDivision.project_id == project_id,
-            SubDivision.is_deleted == False,  # noqa: E712
-        )
-        .order_by(SubDivision.name)
-        .limit(limit)
-        .offset(offset)
-    )
+    """Return a paginated slice of non-deleted sub-divisions (teams)."""
+    stmt = select(SubDivision).where(SubDivision.is_deleted == False)
+    if project_id:
+        stmt = stmt.where(SubDivision.project_id == project_id)
+        
+    if filters:
+        stmt = _apply_workflow_filters(stmt, filters)
+        
+    stmt = stmt.order_by(SubDivision.name).limit(limit).offset(offset)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 
-async def count_active_subdivisions_for_project(
-    db: AsyncSession, project_id: uuid.UUID
+async def count_active_teams(
+    db: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    filters: WorkflowFilterParams | None = None,
 ) -> int:
-    """Return the total count of non-deleted subdivisions for a project."""
+    """Return the total count of non-deleted subdivisions (teams)."""
     from sqlalchemy import func
-    result = await db.execute(
-        select(func.count()).select_from(SubDivision).where(
-            SubDivision.project_id == project_id,
-            SubDivision.is_deleted == False,  # noqa: E712
-        )
-    )
+    stmt = select(func.count()).select_from(SubDivision).where(SubDivision.is_deleted == False)
+    if project_id:
+        stmt = stmt.where(SubDivision.project_id == project_id)
+        
+    if filters:
+        stmt = _apply_workflow_filters(stmt, filters)
+        
+    result = await db.execute(stmt)
     return result.scalar_one()
 
 
-async def get_subdivision_by_id(
+async def get_team_by_id(
     db: AsyncSession,
     sd_id: uuid.UUID,
 ) -> SubDivision | None:
-    """Fetch a single non-deleted SubDivision by primary key."""
+    """Fetch a single non-deleted SubDivision (Team) by primary key."""
     result = await db.execute(
         select(SubDivision).where(
             SubDivision.id == sd_id,
@@ -246,13 +251,13 @@ async def get_subdivision_by_id(
     return result.scalar_one_or_none()
 
 
-async def create_subdivision(
+async def create_team(
     db: AsyncSession,
     project_id: uuid.UUID,
-    payload: SubDivisionCreate,
+    payload: TeamCreate,
 ) -> SubDivision:
     """
-    Persist a new SubDivision for the given project.
+    Persist a new Team (SubDivision).
 
     ``project_id`` is taken from the URL path parameter rather than the
     request body (Fix #7).
@@ -266,12 +271,12 @@ async def create_subdivision(
     return sd
 
 
-async def update_subdivision(
+async def update_team(
     db: AsyncSession,
     sd: SubDivision,
-    payload: SubDivisionUpdate,
+    payload: TeamUpdate,
 ) -> SubDivision:
-    """Apply a partial update to an already-fetched SubDivision ORM object."""
+    """Apply a partial update to an already-fetched Team ORM object."""
     from app.models.models import SubDivisionStatus, Budget
     from sqlalchemy import select
 
@@ -294,8 +299,8 @@ async def update_subdivision(
     return sd
 
 
-async def delete_subdivision(db: AsyncSession, sd: SubDivision) -> None:
-    """Soft-delete a SubDivision by setting is_deleted=True."""
+async def delete_team(db: AsyncSession, sd: SubDivision) -> None:
+    """Soft-delete a Team (SubDivision) by setting is_deleted=True."""
     sd.is_deleted = True
     db.add(sd)
     await db.flush()

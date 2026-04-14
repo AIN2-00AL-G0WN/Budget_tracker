@@ -21,6 +21,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.projects import router as projects_router
+from app.api.v1.endpoints.teams import router as teams_router
+from app.api.v1.endpoints.test_runs import router as test_runs_router
 from app.api.v1.endpoints.budgets import router as budgets_router
 from app.api.v1.endpoints.admin import router as admin_router
 from app.api.v1.endpoints.meta import router as meta_router
@@ -89,6 +91,8 @@ API_V1_PREFIX = "/api/v1"
 
 app.include_router(auth_router, prefix=API_V1_PREFIX)
 app.include_router(projects_router, prefix=API_V1_PREFIX)
+app.include_router(teams_router, prefix=API_V1_PREFIX)
+app.include_router(test_runs_router, prefix=API_V1_PREFIX)
 app.include_router(budgets_router, prefix=API_V1_PREFIX)
 app.include_router(admin_router, prefix=API_V1_PREFIX)
 app.include_router(meta_router, prefix=API_V1_PREFIX)

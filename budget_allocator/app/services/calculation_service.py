@@ -262,6 +262,8 @@ def calculate_budget(
         return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     return {
+        "tc_count":             tc_count,
+        "duration_in_days":     duration_in_days,
         "manual_tc_count":      int(manual_tc),
         "automation_tc_count":  int(automation_tc),
         "adhoc_request":        int(adhoc),
@@ -279,6 +281,7 @@ def calculate_budget(
         "lab_tech_manager_cost": _r2(lab_tech_manager_cost),
         "project_manager_cost": _r2(project_manager_cost),
         "total_budget":         _r2(total_budget),
+        **_overrides,
     }
 
 

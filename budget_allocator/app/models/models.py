@@ -147,19 +147,16 @@ class User(Base):
     auth_logs: Mapped[list["AuthLog"]] = relationship(
         "AuthLog",
         back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="noload",
+        cascade="all, delete-orphan"
     )
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification",
         back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="noload",
+        cascade="all, delete-orphan"
     )
     audit_logs: Mapped[list["AuditLog"]] = relationship(
         "AuditLog",
-        back_populates="actor",
-        lazy="noload",
+        back_populates="actor"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -197,14 +194,14 @@ class AuthLog(Base):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="auth_logs", lazy="noload")
+    user: Mapped["User"] = relationship("User", back_populates="auth_logs")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<AuthLog id={self.id} event={self.event_type.value}>"
 
 
 # ===========================================================================
-# Projects  ➜  SubDivisions  ➜  Budgets
+# Projects  ➜  SubDivisions (Teams)  ➜  TestRuns  ➜  Budgets
 # ===========================================================================
 
 class Project(Base):
@@ -221,6 +218,7 @@ class Project(Base):
         default=uuid.uuid4,
     )
     name: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    business_unit: Mapped[str] = mapped_column(String(128), index=True, nullable=False, server_default="Default")
     status: Mapped[ProjectStatus] = mapped_column(
         SAEnum(ProjectStatus, name="project_status", create_type=True),
         default=ProjectStatus.ACTIVE,
@@ -247,8 +245,7 @@ class Project(Base):
     sub_divisions: Mapped[list["SubDivision"]] = relationship(
         "SubDivision",
         back_populates="project",
-        cascade="all, delete-orphan",
-        lazy="noload",
+        cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -307,24 +304,74 @@ class SubDivision(Base):
     # Relationships
     project: Mapped["Project"] = relationship(
         "Project",
-        back_populates="sub_divisions",
-        lazy="noload",
+        back_populates="sub_divisions"
     )
-    budget: Mapped[Optional["Budget"]] = relationship(
-        "Budget",
+    test_runs: Mapped[list["TestRun"]] = relationship(
+        "TestRun",
         back_populates="sub_division",
-        uselist=False,            # One-to-one
-        cascade="all, delete-orphan",
-        lazy="noload",
+        cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<SubDivision id={self.id!s:.8} name={self.name!r}>"
 
 
+class TestRun(Base):
+    """
+    Fourth layer of the hierarchy: a specific cycle/event representing a Test Run.
+    Each TestRun belongs to a SubDivision (Team) and has exactly one Budget record.
+    """
+
+    __tablename__ = "test_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    sub_division_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sub_divisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    sub_division: Mapped["SubDivision"] = relationship(
+        "SubDivision",
+        back_populates="test_runs"
+    )
+    budget: Mapped[Optional["Budget"]] = relationship(
+        "Budget",
+        back_populates="test_run",
+        uselist=False,            # One-to-one
+        cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<TestRun id={self.id!s:.8} name={self.name!r}>"
+
+
 class Budget(Base):
     """
-    Flat budget record for one SubDivision.
+    Flat budget record for one TestRun.
 
     Column naming mirrors the Excel sheet columns exactly so that the
     CalculationService output maps 1-to-1 and auditors can cross-reference.
@@ -362,11 +409,11 @@ class Budget(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    sub_division_id: Mapped[uuid.UUID] = mapped_column(
+    test_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sub_divisions.id", ondelete="CASCADE"),
+        ForeignKey("test_runs.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,      # Enforce one Budget per SubDivision at DB level
+        unique=True,      # Enforce one Budget per TestRun at DB level
         index=True,
     )
 
@@ -380,7 +427,7 @@ class Budget(Base):
     adhoc_request: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     total_tc: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     duration_wks: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    manual_hc: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    manual_hc: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)
     automation_hc: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     manual_hc_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     automation_hc_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -394,7 +441,7 @@ class Budget(Base):
     lab_tech_manager_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # row 20: Lab Tech & Manager - 40%
     project_manager_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)   # row 21: Project Manager - 40%
 
-    total_budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)
 
     # ---- Per-Budget Rate Overrides (NULL = use global RateCard value) --------
     manual_tc_multiplier_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -421,6 +468,7 @@ class Budget(Base):
         Boolean,
         default=False,
         nullable=False,
+        index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -435,17 +483,16 @@ class Budget(Base):
     )
 
     # Relationships
-    sub_division: Mapped["SubDivision"] = relationship(
-        "SubDivision",
-        back_populates="budget",
-        lazy="noload",
+    test_run: Mapped["TestRun"] = relationship(
+        "TestRun",
+        back_populates="budget"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<Budget id={self.id!s:.8} "
             f"total={self.total_budget} "
-            f"sub_division={self.sub_division_id!s:.8}>"
+            f"test_run={self.test_run_id!s:.8}>"
         )
 
 
@@ -555,8 +602,7 @@ class AuditLog(Base):
     # Relationships
     actor: Mapped[Optional["User"]] = relationship(
         "User",
-        back_populates="audit_logs",
-        lazy="noload",
+        back_populates="audit_logs"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -642,8 +688,7 @@ class Notification(Base):
     # Relationships
     user: Mapped["User"] = relationship(
         "User",
-        back_populates="notifications",
-        lazy="noload",
+        back_populates="notifications"
     )
 
     def __repr__(self) -> str:  # pragma: no cover

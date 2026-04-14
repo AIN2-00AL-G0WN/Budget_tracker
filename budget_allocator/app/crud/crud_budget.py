@@ -18,8 +18,81 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.models.models import Budget
+from app.api.dependencies.filters import BudgetFilterParams
+
+
+def _apply_budget_filters(stmt, filters: BudgetFilterParams):
+    from sqlalchemy import or_, and_
+    if filters.min_total_cost is not None:
+        stmt = stmt.where(Budget.total_budget >= filters.min_total_cost)
+    if filters.max_total_cost is not None:
+        stmt = stmt.where(Budget.total_budget <= filters.max_total_cost)
+    if filters.min_headcount is not None:
+        stmt = stmt.where(Budget.manual_hc >= filters.min_headcount)
+    if filters.is_locked is not None:
+        stmt = stmt.where(Budget.is_locked == filters.is_locked)
+    if filters.has_overrides is not None:
+        override_cols = [
+            Budget.manual_tc_multiplier_override,
+            Budget.automation_tc_multiplier_override,
+            Budget.adhoc_request_multiplier_override,
+            Budget.working_days_per_week_override,
+            Budget.hrs_per_wk_per_hc_override,
+            Budget.manual_hc_divisor_override,
+            Budget.automation_hc_divisor_override,
+            Budget.hc_rate_card_override,
+            Budget.sqpm_boise_pct_override,
+            Budget.pl_pct_override,
+            Budget.per_wqe_pct_override,
+            Budget.asqpm_pct_override,
+            Budget.lab_tech_manager_pct_override,
+            Budget.project_manager_pct_override,
+        ]
+        if filters.has_overrides:
+            stmt = stmt.where(or_(col.is_not(None) for col in override_cols))
+        else:
+            stmt = stmt.where(and_(col.is_(None) for col in override_cols))
+    return stmt
+
+
+async def get_budgets_paginated(
+    db: AsyncSession,
+    *,
+    test_run_id: uuid.UUID | None = None,
+    filters: BudgetFilterParams | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Sequence[Budget]:
+    stmt = select(Budget).where(Budget.is_deleted == False)
+    if test_run_id:
+        stmt = stmt.where(Budget.test_run_id == test_run_id)
+        
+    if filters:
+        stmt = _apply_budget_filters(stmt, filters)
+        
+    stmt = stmt.options(joinedload(Budget.test_run)).order_by(Budget.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def count_active_budgets(
+    db: AsyncSession,
+    test_run_id: uuid.UUID | None = None,
+    filters: BudgetFilterParams | None = None,
+) -> int:
+    from sqlalchemy import func
+    stmt = select(func.count()).select_from(Budget).where(Budget.is_deleted == False)
+    if test_run_id:
+        stmt = stmt.where(Budget.test_run_id == test_run_id)
+        
+    if filters:
+        stmt = _apply_budget_filters(stmt, filters)
+        
+    result = await db.execute(stmt)
+    return result.scalar_one()
 
 
 async def get_budget_by_id(db: AsyncSession, budget_id: uuid.UUID) -> Budget | None:
@@ -33,20 +106,50 @@ async def get_budget_by_id(db: AsyncSession, budget_id: uuid.UUID) -> Budget | N
     return result.scalar_one_or_none()
 
 
-async def get_budget_for_subdivision(
+async def get_budget_for_test_run(
     db: AsyncSession,
-    sub_division_id: uuid.UUID,
+    test_run_id: uuid.UUID,
 ) -> Budget | None:
     """
-    Return the Budget associated with a given SubDivision, or None.
+    Return the Budget associated with a given TestRun, or None.
 
-    Used to enforce the one-budget-per-subdivision rule before a POST.
+    Used to enforce the one-budget-per-testrun rule before a POST.
     """
     result = await db.execute(
         select(Budget).where(
-            Budget.sub_division_id == sub_division_id,
+            Budget.test_run_id == test_run_id,
             Budget.is_deleted == False,  # noqa: E712
         )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_previous_budget_for_test_run(
+    db: AsyncSession,
+    test_run_id: uuid.UUID,
+) -> Budget | None:
+    """
+    Find the most recent previous Budget belonging to the same Team
+    (joined through TestRun).
+    """
+    from app.models.models import TestRun
+    
+    # First, get the team (sub_division_id) for this test_run
+    tr = await db.execute(select(TestRun).where(TestRun.id == test_run_id))
+    tr_obj = tr.scalar_one_or_none()
+    if not tr_obj:
+        return None
+        
+    result = await db.execute(
+        select(Budget)
+        .join(TestRun, Budget.test_run_id == TestRun.id)
+        .where(
+            TestRun.sub_division_id == tr_obj.sub_division_id,
+            TestRun.id != test_run_id,
+            Budget.is_deleted == False,
+        )
+        .order_by(Budget.created_at.desc())
+        .limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -54,35 +157,22 @@ async def get_budget_for_subdivision(
 async def create_budget(
     db: AsyncSession,
     *,
-    sub_division_id: uuid.UUID,
-    tc_count: int,
-    duration_in_days: int,
-    calculated_fields: dict,
-    override_fields: dict | None = None,
+    test_run_id: uuid.UUID,
+    full_budget_data: dict,
 ) -> Budget:
     """
     Persist a fully-calculated Budget row.
 
     Parameters
     ----------
-    sub_division_id:
-        FK to the parent SubDivision.
-    tc_count / duration_in_days:
-        The raw manual inputs provided by the manager.
-    calculated_fields:
-        A flat ``dict`` of all computed column values returned by
-        ``compute_and_get_budget_fields``.  Spread directly onto the model.
-    override_fields:
-        A flat ``dict`` of the per-budget rate overrides supplied by the
-        client (e.g. ``{"hc_rate_card_override": 5.0}``).  Only non-None
-        values are written; None means the global rate was used.
+    test_run_id:
+        FK to the parent TestRun.
+    full_budget_data:
+        A flat ``dict`` of all computed column values, manual inputs, and overrides.
     """
     budget = Budget(
-        sub_division_id=sub_division_id,
-        tc_count=tc_count,
-        duration_in_days=duration_in_days,
-        **calculated_fields,
-        **(override_fields or {}),
+        test_run_id=test_run_id,
+        **full_budget_data,
     )
     db.add(budget)
     await db.flush()
@@ -94,26 +184,14 @@ async def update_budget(
     db: AsyncSession,
     budget: Budget,
     *,
-    tc_count: int,
-    duration_in_days: int,
-    calculated_fields: dict,
-    override_fields: dict | None = None,
+    full_budget_data: dict,
 ) -> Budget:
     """
     Overwrite an existing Budget with freshly-calculated values.
 
-    All calculated fields are replaced atomically — partial updates are
-    intentionally not supported because any single-field change invalidates
-    the formula consistency of the entire row.
-
-    override_fields are also fully replaced: any key absent from the new
-    payload reverts to NULL (no override, use global rate).
+    All calculated fields are replaced atomically.
+    override_fields are also fully replaced.
     """
-    budget.tc_count = tc_count
-    budget.duration_in_days = duration_in_days
-    for field, value in calculated_fields.items():
-        setattr(budget, field, value)
-    # Reset all overrides to NULL first, then apply the new ones
     _OVERRIDE_KEYS = [
         "manual_tc_multiplier_override", "automation_tc_multiplier_override",
         "adhoc_request_multiplier_override", "working_days_per_week_override",
@@ -124,7 +202,8 @@ async def update_budget(
     ]
     for key in _OVERRIDE_KEYS:
         setattr(budget, key, None)   # reset to "use global rate"
-    for field, value in (override_fields or {}).items():
+        
+    for field, value in full_budget_data.items():
         setattr(budget, field, value)
     db.add(budget)
     await db.flush()            # Trigger UPDATE so DB sets updated_at
