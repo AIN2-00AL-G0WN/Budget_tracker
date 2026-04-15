@@ -20,9 +20,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.endpoints.auth import router as auth_router
-from app.api.v1.endpoints.projects import router as projects_router
+from app.api.v1.endpoints.families import router as families_router
 from app.api.v1.endpoints.teams import router as teams_router
-from app.api.v1.endpoints.test_runs import router as test_runs_router
+from app.api.v1.endpoints.runs import router as runs_router
 from app.api.v1.endpoints.budgets import router as budgets_router
 from app.api.v1.endpoints.admin import router as admin_router
 from app.api.v1.endpoints.meta import router as meta_router
@@ -51,7 +51,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1. Wire up automatic audit logging
     register_audit_listeners()
 
-    # 2. Start the in-process scheduler
+    # 2. Trigger auto-seeding if projects table is empty
+    from app.core.database import AsyncSessionLocal
+    from app.core.setup_v1 import seed_initial_data
+    
+    async with AsyncSessionLocal() as db:
+        await seed_initial_data(db)
+
+    # 3. Start the in-process scheduler
     async with scheduler_lifespan():
         logger.info("🚀  %s v%s is ready", settings.app_name, settings.app_version)
         yield
@@ -91,9 +98,9 @@ app.add_middleware(
 API_V1_PREFIX = "/api/v1"
 
 app.include_router(auth_router, prefix=API_V1_PREFIX)
-app.include_router(projects_router, prefix=API_V1_PREFIX)
+app.include_router(families_router, prefix=API_V1_PREFIX)
 app.include_router(teams_router, prefix=API_V1_PREFIX)
-app.include_router(test_runs_router, prefix=API_V1_PREFIX)
+app.include_router(runs_router, prefix=API_V1_PREFIX)
 app.include_router(budgets_router, prefix=API_V1_PREFIX)
 app.include_router(admin_router, prefix=API_V1_PREFIX)
 app.include_router(meta_router, prefix=API_V1_PREFIX)

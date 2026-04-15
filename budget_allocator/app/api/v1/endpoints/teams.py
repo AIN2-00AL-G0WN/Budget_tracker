@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_admin_user, get_current_user
 from app.core.database import get_db
-from app.crud import crud_project
+from app.crud import crud_family
 from app.models.models import User
 from app.schemas.schemas import (
     PaginatedResponse,
@@ -30,30 +30,30 @@ logger = logging.getLogger(__name__)
 
 @router.get("", response_model=PaginatedResponse[TeamOut])
 async def list_teams(
-    project_id: uuid.UUID | None = Query(None, description="Filter by parent project ID"),
+    family_id: uuid.UUID | None = Query(None, description="Filter by parent family ID"),
     filters: WorkflowFilterParams = Depends(get_workflow_filters),
     limit: int = Query(50, le=500),
     offset: int = Query(0, ge=0),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[TeamOut]:
-    total = await crud_project.count_active_teams(db, project_id=project_id, filters=filters)
-    items = await crud_project.get_teams_paginated(db, project_id=project_id, filters=filters, limit=limit, offset=offset)
+    total = await crud_family.count_active_teams(db, family_id=family_id, filters=filters)
+    items = await crud_family.get_teams_paginated(db, family_id=family_id, filters=filters, limit=limit, offset=offset)
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=TeamOut, status_code=status.HTTP_201_CREATED)
 async def create_team(
-    project_id: uuid.UUID = Query(..., description="Parent project ID"),
+    family_id: uuid.UUID = Query(..., description="Parent family ID"),
     payload: TeamCreate = ...,
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> TeamOut:
-    parent = await crud_project.get_project_by_id(db, project_id)
+    parent = await crud_family.get_family_by_id(db, family_id)
     if not parent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Family not found")
 
-    team = await crud_project.create_team(db, project_id, payload)
+    team = await crud_family.create_team(db, family_id, payload)
     return team
 
 
@@ -63,7 +63,7 @@ async def get_team(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TeamOut:
-    team = await crud_project.get_team_by_id(db, team_id)
+    team = await crud_family.get_team_by_id(db, team_id)
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
     return team
@@ -76,10 +76,10 @@ async def update_team(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> TeamOut:
-    team = await crud_project.get_team_by_id(db, team_id)
+    team = await crud_family.get_team_by_id(db, team_id)
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    team = await crud_project.update_team(db, team, payload)
+    team = await crud_family.update_team(db, team, payload)
     return team
 
 
@@ -89,8 +89,8 @@ async def delete_team(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    team = await crud_project.get_team_by_id(db, team_id)
+    team = await crud_family.get_team_by_id(db, team_id)
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    await crud_project.delete_team(db, team)
+    await crud_family.delete_team(db, team)
     return Response(status_code=204)

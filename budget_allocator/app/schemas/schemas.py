@@ -241,40 +241,40 @@ class ResetLinkResponse(BaseModel):
 
 
 # ===========================================================================
-# Project schemas
+# Family schemas (formerly Project)
 # ===========================================================================
 
-class ProjectCreate(BaseModel):
+class FamilyCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=256)
     business_unit: str = Field(..., min_length=2, max_length=128)
     status: str = "ACTIVE"
 
     @field_validator("status")
     @classmethod
-    def _valid_project_status(cls, v: str) -> str:
+    def _valid_family_status(cls, v: str) -> str:
         valid = {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
         if v not in valid:
-            raise ValueError(f"Invalid project status '{v}'. Must be one of: {sorted(valid)}")
+            raise ValueError(f"Invalid family status '{v}'. Must be one of: {sorted(valid)}")
         return v
 
 
-class ProjectUpdate(BaseModel):
+class FamilyUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
     business_unit: Optional[str] = Field(default=None, min_length=2, max_length=128)
     status: Optional[str] = None
 
     @field_validator("status")
     @classmethod
-    def _valid_project_status(cls, v: str | None) -> str | None:
+    def _valid_family_status(cls, v: str | None) -> str | None:
         if v is None:
             return v
         valid = {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
         if v not in valid:
-            raise ValueError(f"Invalid project status '{v}'. Must be one of: {sorted(valid)}")
+            raise ValueError(f"Invalid family status '{v}'. Must be one of: {sorted(valid)}")
         return v
 
 
-class ProjectOut(_Base):
+class FamilyOut(_Base):
     id: uuid.UUID
     name: str
     business_unit: str
@@ -284,38 +284,22 @@ class ProjectOut(_Base):
     updated_at: datetime
 
 
+# Backward-compat aliases
+ProjectCreate = FamilyCreate
+ProjectUpdate = FamilyUpdate
+ProjectOut = FamilyOut
+
+
 # ===========================================================================
 # Team schemas (formerly SubDivision)
 # ===========================================================================
 
 class TeamCreate(BaseModel):
     """
-    ``project_id`` is intentionally absent — it is taken from the URL path
-    parameter in the router to avoid body/path discrepancies (Fix #7).
+    Simplified: UI only sends `name`. Backend sets status=PLANNED.
+    `family_id` is taken from the URL path parameter.
     """
     name: str = Field(..., min_length=2, max_length=256)
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    status: str = "PLANNED"
-
-    #_VALID_SD_STATUSES class variable removed — was dead code (Bug #8 fix)
-
-    @field_validator("status")
-    @classmethod
-    def _valid_subdivision_status(cls, v: str) -> str:
-        valid = {"PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"}
-        if v not in valid:
-            raise ValueError(
-                f"Invalid subdivision status '{v}'. "
-                f"Must be one of: {sorted(valid)}"
-            )
-        return v
-
-    @model_validator(mode="after")
-    def _validate_dates(self) -> "TeamCreate":
-        if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValueError("end_date must be on or after start_date")
-        return self
 
 
 class TeamUpdate(BaseModel):
@@ -326,13 +310,13 @@ class TeamUpdate(BaseModel):
 
     @field_validator("status")
     @classmethod
-    def _valid_subdivision_status(cls, v: str | None) -> str | None:
+    def _valid_team_status(cls, v: str | None) -> str | None:
         if v is None:
             return v
         valid = {"PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"}
         if v not in valid:
             raise ValueError(
-                f"Invalid subdivision status '{v}'. "
+                f"Invalid team status '{v}'. "
                 f"Must be one of: {sorted(valid)}"
             )
         return v
@@ -340,7 +324,7 @@ class TeamUpdate(BaseModel):
 
 class TeamOut(_Base):
     id: uuid.UUID
-    project_id: uuid.UUID
+    family_id: uuid.UUID
     name: str
     start_date: Optional[date]
     end_date: Optional[date]
@@ -349,25 +333,31 @@ class TeamOut(_Base):
 
 
 # ===========================================================================
-# TestRun schemas
+# Run schemas (formerly TestRun)
 # ===========================================================================
 
-class TestRunCreate(BaseModel):
+class RunCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=256)
 
 
-class TestRunUpdate(BaseModel):
+class RunUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
     change_reason: str = Field(..., min_length=5, description="Mandatory reason for this change")
 
 
-class TestRunOut(_Base):
+class RunOut(_Base):
     id: uuid.UUID
-    sub_division_id: uuid.UUID
+    team_id: uuid.UUID
     name: str
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+
+
+# Backward-compat aliases
+TestRunCreate = RunCreate
+TestRunUpdate = RunUpdate
+TestRunOut = RunOut
 
 
 # ===========================================================================
@@ -385,7 +375,6 @@ class BudgetCreate(BaseModel):
     for this budget's calculation only.  Omit or pass ``null`` to use the
     admin-configured global rate.
     """
-    test_run_id: Optional[uuid.UUID] = Field(default=None, description="FK to parent TestRun")
     tc_count: Optional[float] = Field(default=None, gt=0, description="Total Test Case count (manual input)")
     duration_in_days: Optional[float] = Field(default=None, gt=0, description="Engagement duration in working days")
 
@@ -409,6 +398,15 @@ class BudgetCreate(BaseModel):
     lab_tech_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     project_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
 
+    start_date: date = Field(..., description="Start date of the engagement")
+    end_date: date = Field(..., description="End date of the engagement")
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> "BudgetCreate":
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
+
 
 class BudgetUpdate(BaseModel):
     """
@@ -418,10 +416,9 @@ class BudgetUpdate(BaseModel):
     different TestRun after creation.  Including it in the PATCH body would
     be misleading.
     """
-    test_run_id: uuid.UUID = Field(..., description="Bind this budget to a TestRun")
-    tc_count: float = Field(..., gt=0, description="Total Test Case count (manual input)")
-    duration_in_days: float = Field(..., gt=0, description="Engagement duration in working days")
     change_reason: str = Field(..., min_length=5, description="Mandatory reason for this change")
+    tc_count: Optional[float] = Field(default=None, gt=0, description="Total Test Case count (manual input)")
+    duration_in_days: Optional[float] = Field(default=None, gt=0, description="Engagement duration in working days")
 
     # Per-budget rate overrides — all optional
     manual_tc_multiplier_override: Optional[float] = Field(default=None, gt=0)
@@ -443,10 +440,19 @@ class BudgetUpdate(BaseModel):
     lab_tech_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     project_manager_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
 
+    start_date: Optional[date] = Field(default=None, description="Start date of the engagement")
+    end_date: Optional[date] = Field(default=None, description="End date of the engagement")
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> "BudgetUpdate":
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
+
 
 class BudgetOut(_Base):
     id: uuid.UUID
-    test_run_id: uuid.UUID
+    run_id: uuid.UUID
 
     # Inputs
     tc_count: float
@@ -495,6 +501,23 @@ class BudgetOut(_Base):
     is_locked: bool
     created_at: datetime
     updated_at: datetime
+
+
+class BudgetVersionOut(BaseModel):
+    """Schema for returning historical versions of a budget from the AuditLog."""
+    budget_id: str
+    edit_timestamp: datetime
+    user_id: Optional[str]
+    change_reason: Optional[str]
+    snapshot: dict
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BudgetRestore(BaseModel):
+    """Payload for restoring a budget to a previous version."""
+    target_timestamp: datetime = Field(..., description="Exact edit_timestamp from the Budget history to restore to.")
+    change_reason: str = Field(..., min_length=5, description="Mandatory reason for this rollback.")
 
 
 class BudgetSummaryOut(BaseModel):

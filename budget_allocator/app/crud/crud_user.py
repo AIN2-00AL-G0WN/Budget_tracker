@@ -66,7 +66,7 @@ async def create_user(
     *,
     username: str,
     hashed_password: str,
-    is_admin: bool = False,
+    is_admin: bool = True,
     is_active: bool = True,
     requires_password_change: bool = True,
     token_version: int = 0,

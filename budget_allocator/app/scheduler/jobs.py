@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Notification, SubDivision, SubDivisionStatus, User
+from app.models.models import Notification, Team, TeamStatus, User
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +43,19 @@ async def check_deadline_proximity(db: AsyncSession) -> None:
     today: date = datetime.now(timezone.utc).date()
     threshold = today + timedelta(days=ALERT_DAYS_BEFORE)
 
-    # Find sub-divisions expiring soon that are still active
+    # Find teams expiring soon that are still active
     sd_result = await db.execute(
-        select(SubDivision).where(
-            SubDivision.end_date <= threshold,
-            SubDivision.end_date >= today,
-            SubDivision.status == SubDivisionStatus.IN_PROGRESS,
-            SubDivision.is_deleted == False,  # noqa: E712 — Bug #3 fix
+        select(Team).where(
+            Team.end_date <= threshold,
+            Team.end_date >= today,
+            Team.status == TeamStatus.IN_PROGRESS,
+            Team.is_deleted == False,  # noqa: E712
         )
     )
     expiring = sd_result.scalars().all()
 
     if not expiring:
-        logger.debug("Deadline check: no expiring sub-divisions found")
+        logger.debug("Deadline check: no expiring teams found")
         return
 
     # Fetch all active admin users to notify
@@ -78,18 +78,16 @@ async def check_deadline_proximity(db: AsyncSession) -> None:
         days_left = (sd.end_date - today).days
         label = "today" if days_left == 0 else f"in {days_left} day(s)"
         msg = (
-            f"⚠ Deadline Alert: SubDivision '{sd.name}' is ending {label} "
+            f"⚠ Deadline Alert: Team '{sd.name}' is ending {label} "
             f"({sd.end_date}). Please review budget status."
         )
         for admin in admins:
-            # Fix #8: Skip if we already notified this admin about this
-            # subdivision today (prevents duplicates on re-runs / restarts).
             already_sent = await db.execute(
                 select(func.count()).select_from(Notification).where(
                     Notification.user_id == admin.id,
                     Notification.created_at >= today_start,
                     Notification.created_at < today_end,
-                    Notification.message.contains(f"SubDivision '{sd.name}'"),
+                    Notification.message.contains(f"Team '{sd.name}'"),
                 )
             )
             already_sent_count = already_sent.scalar()  # Bug #1 fix: cache scalar, only call once
@@ -110,7 +108,7 @@ async def check_deadline_proximity(db: AsyncSession) -> None:
 
     logger.info(
         "Deadline job: created %d notification(s), skipped %d duplicate(s) "
-        "for %d expiring sub-division(s)",
+        "for %d expiring team(s)",
         created,
         skipped,
         len(expiring),

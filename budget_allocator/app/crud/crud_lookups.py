@@ -13,17 +13,17 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Project, SubDivision, User
+from app.models.models import Family, Team, User
 
-async def get_project_lookups(db: AsyncSession) -> Sequence[tuple[uuid.UUID, str]]:
-    """Fetch lightweight ID and Name for all active Projects."""
-    stmt = select(Project.id, Project.name).where(Project.is_deleted == False).order_by(Project.name)
+async def get_family_lookups(db: AsyncSession) -> Sequence[tuple[uuid.UUID, str, str]]:
+    """Fetch lightweight ID, Name, and Business Unit for all active Families."""
+    stmt = select(Family.id, Family.name, Family.business_unit).where(Family.is_deleted == False).order_by(Family.name)
     result = await db.execute(stmt)
     return result.all()
 
 async def get_team_lookups(db: AsyncSession) -> Sequence[tuple[uuid.UUID, str]]:
-    """Fetch lightweight ID and Name for all active SubDivisions (Teams)."""
-    stmt = select(SubDivision.id, SubDivision.name).where(SubDivision.is_deleted == False).order_by(SubDivision.name)
+    """Fetch lightweight ID and Name for all active Teams."""
+    stmt = select(Team.id, Team.name).where(Team.is_deleted == False).order_by(Team.name)
     result = await db.execute(stmt)
     return result.all()
 
@@ -35,6 +35,6 @@ async def get_user_lookups(db: AsyncSession) -> Sequence[tuple[uuid.UUID, str]]:
 
 async def get_distinct_business_units(db: AsyncSession) -> Sequence[str]:
     """Fetch a unique list of all active business units."""
-    stmt = select(Project.business_unit).where(Project.is_deleted == False).distinct().order_by(Project.business_unit)
+    stmt = select(Family.business_unit).where(Family.is_deleted == False).distinct().order_by(Family.business_unit)
     result = await db.execute(stmt)
     return result.scalars().all()

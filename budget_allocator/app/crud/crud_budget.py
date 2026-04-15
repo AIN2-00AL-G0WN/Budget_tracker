@@ -15,12 +15,12 @@ Responsibilities
 from __future__ import annotations
 
 import uuid
+from typing import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
-
-from app.models.models import Budget
+from app.models.models import Budget, Run, Team
 from app.api.dependencies.filters import BudgetFilterParams
 
 
@@ -61,36 +61,32 @@ def _apply_budget_filters(stmt, filters: BudgetFilterParams):
 async def get_budgets_paginated(
     db: AsyncSession,
     *,
-    test_run_id: uuid.UUID | None = None,
+    run_id: uuid.UUID | None = None,
     filters: BudgetFilterParams | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Sequence[Budget]:
-    stmt = select(Budget).where(Budget.is_deleted == False)
-    if test_run_id:
-        stmt = stmt.where(Budget.test_run_id == test_run_id)
-        
+    stmt = select(Budget).where(Budget.is_deleted == False)  # noqa: E712
+    if run_id:
+        stmt = stmt.where(Budget.run_id == run_id)
     if filters:
         stmt = _apply_budget_filters(stmt, filters)
-        
-    stmt = stmt.options(joinedload(Budget.test_run)).order_by(Budget.created_at.desc()).limit(limit).offset(offset)
+    stmt = stmt.options(joinedload(Budget.run).joinedload(Run.team)).order_by(Budget.created_at.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
     return result.scalars().all()
 
 
 async def count_active_budgets(
     db: AsyncSession,
-    test_run_id: uuid.UUID | None = None,
+    run_id: uuid.UUID | None = None,
     filters: BudgetFilterParams | None = None,
 ) -> int:
     from sqlalchemy import func
-    stmt = select(func.count()).select_from(Budget).where(Budget.is_deleted == False)
-    if test_run_id:
-        stmt = stmt.where(Budget.test_run_id == test_run_id)
-        
+    stmt = select(func.count()).select_from(Budget).where(Budget.is_deleted == False)  # noqa: E712
+    if run_id:
+        stmt = stmt.where(Budget.run_id == run_id)
     if filters:
         stmt = _apply_budget_filters(stmt, filters)
-        
     result = await db.execute(stmt)
     return result.scalar_one()
 
@@ -106,47 +102,48 @@ async def get_budget_by_id(db: AsyncSession, budget_id: uuid.UUID) -> Budget | N
     return result.scalar_one_or_none()
 
 
-async def get_budget_for_test_run(
+async def get_budget_for_run(
     db: AsyncSession,
-    test_run_id: uuid.UUID,
+    run_id: uuid.UUID,
 ) -> Budget | None:
     """
-    Return the Budget associated with a given TestRun, or None.
-
-    Used to enforce the one-budget-per-testrun rule before a POST.
+    Return the Budget associated with a given Run, or None.
+    Used to enforce the one-budget-per-run rule before a POST.
     """
     result = await db.execute(
         select(Budget).where(
-            Budget.test_run_id == test_run_id,
+            Budget.run_id == run_id,
             Budget.is_deleted == False,  # noqa: E712
         )
     )
     return result.scalar_one_or_none()
 
 
-async def get_previous_budget_for_test_run(
+# Backward-compat alias
+get_budget_for_test_run = get_budget_for_run
+
+
+async def get_previous_budget_for_run(
     db: AsyncSession,
-    test_run_id: uuid.UUID,
+    run_id: uuid.UUID,
 ) -> Budget | None:
     """
-    Find the most recent previous Budget belonging to the same Team
-    (joined through TestRun).
+    Find the most recent previous Budget belonging to the same Team (joined through Run).
     """
-    from app.models.models import TestRun
-    
-    # First, get the team (sub_division_id) for this test_run
-    tr = await db.execute(select(TestRun).where(TestRun.id == test_run_id))
+    from app.models.models import Run
+
+    tr = await db.execute(select(Run).where(Run.id == run_id))
     tr_obj = tr.scalar_one_or_none()
     if not tr_obj:
         return None
-        
+
     result = await db.execute(
         select(Budget)
-        .join(TestRun, Budget.test_run_id == TestRun.id)
+        .join(Run, Budget.run_id == Run.id)
         .where(
-            TestRun.sub_division_id == tr_obj.sub_division_id,
-            TestRun.id != test_run_id,
-            Budget.is_deleted == False,
+            Run.team_id == tr_obj.team_id,
+            Run.id != run_id,
+            Budget.is_deleted == False,  # noqa: E712
         )
         .order_by(Budget.created_at.desc())
         .limit(1)
@@ -154,29 +151,27 @@ async def get_previous_budget_for_test_run(
     return result.scalar_one_or_none()
 
 
+# Backward-compat alias
+get_previous_budget_for_test_run = get_previous_budget_for_run
+
+
 async def create_budget(
     db: AsyncSession,
     *,
-    test_run_id: uuid.UUID,
+    run_id: uuid.UUID,
     full_budget_data: dict,
 ) -> Budget:
     """
     Persist a fully-calculated Budget row.
-
-    Parameters
-    ----------
-    test_run_id:
-        FK to the parent TestRun.
-    full_budget_data:
-        A flat ``dict`` of all computed column values, manual inputs, and overrides.
+    run_id: FK to the parent Run.
     """
     budget = Budget(
-        test_run_id=test_run_id,
+        run_id=run_id,
         **full_budget_data,
     )
     db.add(budget)
     await db.flush()
-    await db.refresh(budget)   # Fix #15: reload updated_at / created_at from DB
+    await db.refresh(budget)
     return budget
 
 
@@ -219,3 +214,38 @@ async def delete_budget(db: AsyncSession, budget: Budget) -> None:
     budget.is_deleted = True
     db.add(budget)
     await db.flush()
+
+
+async def get_budget_history(db: AsyncSession, budget_id: uuid.UUID) -> Sequence[dict]:
+    """Retrieve all historical snapshots for a given budget from the AuditLog."""
+    from app.models.models import AuditLog, User
+    from sqlalchemy.orm import aliased
+
+    # Join with User to get username
+    user_alias = aliased(User)
+    
+    stmt = (
+        select(AuditLog.timestamp, AuditLog.change_reason, AuditLog.new_value, user_alias.username, AuditLog.user_id)
+        .outerjoin(user_alias, AuditLog.user_id == user_alias.id)
+        .where(
+            AuditLog.entity_type == "Budget",
+            AuditLog.entity_id == str(budget_id)
+        )
+        .order_by(AuditLog.timestamp.desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    history = []
+    for row in rows:
+        # Some old audits might not have new_value populated (e.g. DELETE)
+        if not row.new_value:
+            continue
+        history.append({
+            "budget_id": str(budget_id),
+            "edit_timestamp": row.timestamp,
+            "user_id": str(row.user_id) if row.user_id else None,
+            "change_reason": row.change_reason,
+            "snapshot": row.new_value,
+        })
+    return history

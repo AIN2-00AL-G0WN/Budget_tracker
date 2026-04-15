@@ -14,17 +14,17 @@ from app.api.dependencies.auth import get_current_user
 from app.core.database import get_db
 from app.crud import crud_lookups
 from app.models.models import User
-from app.schemas.lookups import LookupItemOut
+from app.schemas.lookups import LookupItemOut, FamilyLookupOut
 
 router = APIRouter(prefix="/lookups", tags=["lookups"])
 
-@router.get("/projects", response_model=List[LookupItemOut[uuid.UUID]])
-async def get_project_lookups(
+@router.get("/families", response_model=List[FamilyLookupOut[uuid.UUID]])
+async def get_family_lookups(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> List[dict]:
-    rows = await crud_lookups.get_project_lookups(db)
-    return [{"id": row.id, "name": row.name} for row in rows]
+    rows = await crud_lookups.get_family_lookups(db)
+    return [{"id": row.id, "name": row.name, "business_unit": row.business_unit} for row in rows]
 
 @router.get("/teams", response_model=List[LookupItemOut[uuid.UUID]])
 async def get_team_lookups(

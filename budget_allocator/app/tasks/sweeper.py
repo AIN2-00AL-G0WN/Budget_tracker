@@ -2,7 +2,7 @@ import logging
 import datetime
 from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
-from app.models.models import TestRun
+from app.models.models import Run
 from app.core.context import current_user_id, current_change_reason
 
 logger = logging.getLogger(__name__)
@@ -23,15 +23,15 @@ async def sweep_expired_runs() -> None:
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(TestRun).where(
-                TestRun.end_date < today,
-                TestRun.status.notin_(["CLOSED", "OVERDUE"])
+            select(Run).where(
+                Run.end_date < today,
+                Run.status.notin_(["CLOSED", "OVERDUE"])
             )
         )
         expired_runs = result.scalars().all()
         
         if not expired_runs:
-            logger.info("No expired TestRuns found to sweep.")
+            logger.info("No expired Runs found to sweep.")
             return
 
         for run in expired_runs:

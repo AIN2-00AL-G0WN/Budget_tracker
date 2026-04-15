@@ -293,6 +293,7 @@ def calculate_budget(
 
 async def compute_and_get_budget_fields(
     *,
+    run_id: uuid.UUID,
     tc_count: float,
     duration_in_days: float,
     db: AsyncSession,
@@ -304,10 +305,33 @@ async def compute_and_get_budget_fields(
 
     Parameters
     ----------
+    run_id: UUID of the parent Run to fetch its dates and Family business unit.
+    tc_count: float
+    duration_in_days: float
     overrides : Optional dict of per-budget override values keyed by the
-                ``*_override`` column name (e.g. ``hc_rate_card_override``).
+                ``*_override`` column name.
                 A value of ``None`` means "use global rate".
     """
+    import uuid
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
+    from app.models.models import Run, Team, Family
+
+    # Fetch Run with relationships
+    stmt = select(Run).options(
+        joinedload(Run.team).joinedload(Team.family)
+    ).where(Run.id == run_id)
+    result = await db.execute(stmt)
+    tr = result.scalar_one_or_none()
+
+    if tr and tr.start_date and tr.end_date:
+        # Calculate working days natively
+        from app.services.calendar_service import calculate_working_days
+        bu = tr.team.family.business_unit
+        wdays = await calculate_working_days(tr.start_date, tr.end_date, db, business_unit=bu)
+        # Override duration_in_days
+        duration_in_days = float(wdays)
+
     rates = await fetch_rate_cards(db)
     return calculate_budget(
         tc_count=tc_count,

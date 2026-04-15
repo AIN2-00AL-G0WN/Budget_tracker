@@ -34,6 +34,7 @@ from sqlalchemy import (
     String,
     Text,
     Index,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
@@ -55,18 +56,24 @@ class AuthEventType(str, enum.Enum):
     TOKEN_INVALIDATED = "TOKEN_INVALIDATED"
 
 
-class ProjectStatus(str, enum.Enum):
+class FamilyStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
     ON_HOLD = "ON_HOLD"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
 
+# Keep alias for backward compat with any running alembic migrations
+ProjectStatus = FamilyStatus
 
-class SubDivisionStatus(str, enum.Enum):
+
+class TeamStatus(str, enum.Enum):
     PLANNED = "PLANNED"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
+
+# Alias
+SubDivisionStatus = TeamStatus
 
 
 class AuditAction(str, enum.Enum):
@@ -201,27 +208,30 @@ class AuthLog(Base):
 
 
 # ===========================================================================
-# Projects  ➜  SubDivisions (Teams)  ➜  TestRuns  ➜  Budgets
+# Families  ➜  Teams  ➜  Runs  ➜  Budgets
 # ===========================================================================
 
-class Project(Base):
+class Family(Base):
     """
-    Top-level grouping (e.g., "Walmart SKU Stage").
-    A project contains multiple SubDivisions (e.g., "CPE/Release").
+    Layer 2 of the hierarchy: a Product Family within a Business Unit.
+    e.g. BU="CPE", Family="INKJET"
     """
 
-    __tablename__ = "projects"
+    __tablename__ = "families"
+    __table_args__ = (
+        UniqueConstraint("business_unit", "name", name="uix_families_bu_name"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
-    name: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     business_unit: Mapped[str] = mapped_column(String(128), index=True, nullable=False, server_default="Default")
-    status: Mapped[ProjectStatus] = mapped_column(
-        SAEnum(ProjectStatus, name="project_status", create_type=True),
-        default=ProjectStatus.ACTIVE,
+    status: Mapped[FamilyStatus] = mapped_column(
+        SAEnum(FamilyStatus, name="family_status", create_type=True),
+        default=FamilyStatus.ACTIVE,
         nullable=False,
     )
     is_deleted: Mapped[bool] = mapped_column(
@@ -242,44 +252,45 @@ class Project(Base):
     )
 
     # Relationships
-    sub_divisions: Mapped[list["SubDivision"]] = relationship(
-        "SubDivision",
-        back_populates="project",
+    teams: Mapped[list["Team"]] = relationship(
+        "Team",
+        back_populates="family",
         cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Project id={self.id!s:.8} name={self.name!r}>"
+        return f"<Family id={self.id!s:.8} name={self.name!r}>"
 
 
-class SubDivision(Base):
+# Backward-compat alias so any code still using Project doesn't crash immediately
+Project = Family
+
+
+class Team(Base):
     """
-    A phase/stream inside a Project (e.g., "CPE/Release").
-    Each SubDivision has exactly one Budget record.
-
-    The `end_date` field is used by the nightly APScheduler job to generate
-    deadline-proximity Notifications.
+    Layer 3: A Team within a Family.
+    Each Team contains multiple Runs.
     """
 
-    __tablename__ = "sub_divisions"
+    __tablename__ = "teams"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
-    project_id: Mapped[uuid.UUID] = mapped_column(
+    family_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"),
+        ForeignKey("families.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
-    status: Mapped[SubDivisionStatus] = mapped_column(
-        SAEnum(SubDivisionStatus, name="sub_division_status", create_type=True),
-        default=SubDivisionStatus.PLANNED,
+    status: Mapped[TeamStatus] = mapped_column(
+        SAEnum(TeamStatus, name="team_status", create_type=True),
+        default=TeamStatus.PLANNED,
         nullable=False,
     )
     is_deleted: Mapped[bool] = mapped_column(
@@ -289,12 +300,9 @@ class SubDivision(Base):
     )
 
     __table_args__ = (
-        # A project cannot have two active sub-divisions with identical names.
-        # This is a partial index to allow creating a new subdivision with the
-        # same name if the old one was soft-deleted.
         Index(
-            "uq_subdivision_project_name",
-            "project_id",
+            "uq_team_family_name",
+            "family_id",
             "name",
             unique=True,
             postgresql_where=(is_deleted == False),  # noqa: E712
@@ -302,41 +310,46 @@ class SubDivision(Base):
     )
 
     # Relationships
-    project: Mapped["Project"] = relationship(
-        "Project",
-        back_populates="sub_divisions"
+    family: Mapped["Family"] = relationship(
+        "Family",
+        back_populates="teams"
     )
-    test_runs: Mapped[list["TestRun"]] = relationship(
-        "TestRun",
-        back_populates="sub_division",
+    runs: Mapped[list["Run"]] = relationship(
+        "Run",
+        back_populates="team",
         cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<SubDivision id={self.id!s:.8} name={self.name!r}>"
+        return f"<Team id={self.id!s:.8} name={self.name!r}>"
 
 
-class TestRun(Base):
+# Backward-compat alias
+SubDivision = Team
+
+
+class Run(Base):
     """
-    Fourth layer of the hierarchy: a specific cycle/event representing a Test Run.
-    Each TestRun belongs to a SubDivision (Team) and has exactly one Budget record.
+    Layer 4: A specific test Run within a Team.
+    Each Run has exactly one Budget record.
     """
 
-    __tablename__ = "test_runs"
+    __tablename__ = "runs"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
-    sub_division_id: Mapped[uuid.UUID] = mapped_column(
+    team_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sub_divisions.id", ondelete="CASCADE"),
+        ForeignKey("teams.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False, index=True)
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     is_deleted: Mapped[bool] = mapped_column(
         Boolean,
@@ -356,19 +369,23 @@ class TestRun(Base):
     )
 
     # Relationships
-    sub_division: Mapped["SubDivision"] = relationship(
-        "SubDivision",
-        back_populates="test_runs"
+    team: Mapped["Team"] = relationship(
+        "Team",
+        back_populates="runs"
     )
     budget: Mapped[Optional["Budget"]] = relationship(
         "Budget",
-        back_populates="test_run",
-        uselist=False,            # One-to-one
+        back_populates="run",
+        uselist=False,
         cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<TestRun id={self.id!s:.8} name={self.name!r}>"
+        return f"<Run id={self.id!s:.8} name={self.name!r}>"
+
+
+# Backward-compat alias
+TestRun = Run
 
 
 class Budget(Base):
@@ -411,11 +428,11 @@ class Budget(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    test_run_id: Mapped[uuid.UUID] = mapped_column(
+    run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("test_runs.id", ondelete="CASCADE"),
+        ForeignKey("runs.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,      # Enforce one Budget per TestRun at DB level
+        unique=True,      # Enforce one Budget per Run at DB level
         index=True,
     )
 
@@ -491,8 +508,8 @@ class Budget(Base):
     )
 
     # Relationships
-    test_run: Mapped["TestRun"] = relationship(
-        "TestRun",
+    run: Mapped["Run"] = relationship(
+        "Run",
         back_populates="budget"
     )
 
@@ -500,7 +517,7 @@ class Budget(Base):
         return (
             f"<Budget id={self.id!s:.8} "
             f"total={self.total_budget} "
-            f"test_run={self.test_run_id!s:.8}>"
+            f"run={self.run_id!s:.8}>"
         )
 
 
@@ -568,7 +585,8 @@ class CompanyHoliday(Base):
     __tablename__ = "company_holidays"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    holiday_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False, index=True)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    business_unit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     description: Mapped[str] = mapped_column(String(256), nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 

@@ -21,15 +21,44 @@ async def get_all_holidays(db: AsyncSession) -> Sequence[CompanyHoliday]:
     return result.scalars().all()
 
 
-async def get_holidays_in_range(db: AsyncSession, start_date: date, end_date: date) -> list[date]:
+async def get_holidays_in_range(db: AsyncSession, start_date: date, end_date: date, business_unit: str) -> list[date]:
     """Return a list of dates representing actual company holidays within a specific date range."""
+    from sqlalchemy import or_
     stmt = select(CompanyHoliday.holiday_date).where(
         CompanyHoliday.is_deleted == False,
         CompanyHoliday.holiday_date >= start_date,
         CompanyHoliday.holiday_date <= end_date,
+        or_(CompanyHoliday.business_unit.is_(None), CompanyHoliday.business_unit == business_unit)
     ).order_by(CompanyHoliday.holiday_date)
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def calculate_working_days(db: AsyncSession, start_date: date, end_date: date, business_unit: str) -> float:
+    """
+    Calculate the actual working days between start_date and end_date (inclusive),
+    excluding Saturdays, Sundays, and any dates mapped in the CompanyHoliday table.
+    """
+    from datetime import timedelta
+
+    days_range = (end_date - start_date).days + 1
+    if days_range <= 0:
+        return 0.0
+
+    # Count weekdays (0=Monday ... 4=Friday)
+    workdays = 0
+    for i in range(days_range):
+        current_date = start_date + timedelta(days=i)
+        if current_date.weekday() < 5:
+            workdays += 1
+
+    # Fetch company holidays for this BU
+    holidays = await get_holidays_in_range(db, start_date, end_date, business_unit)
+    
+    # Subtract holidays that are NOT already weekends
+    valid_holiday_count = sum(1 for h in holidays if h.weekday() < 5)
+
+    return max(0.0, float(workdays - valid_holiday_count))
 
 
 async def create_holiday(db: AsyncSession, payload: CompanyHolidayCreate) -> CompanyHoliday:

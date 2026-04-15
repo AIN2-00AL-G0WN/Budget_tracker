@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud import crud_holiday
 
 
-async def calculate_working_days(start_date: date, end_date: date, db: AsyncSession) -> int:
+async def calculate_working_days(start_date: date, end_date: date, db: AsyncSession, business_unit: str) -> int:
     """
     Calculate the number of standard working days (Mon-Fri) between start_date
     and end_date (inclusive), minus any company holidays that fall on a weekday.
@@ -18,7 +18,7 @@ async def calculate_working_days(start_date: date, end_date: date, db: AsyncSess
         return 0
 
     # 1. Fetch holidays within range natively tracking bounds
-    holidays = await crud_holiday.get_holidays_in_range(db, start_date, end_date)
+    holidays = await crud_holiday.get_holidays_in_range(db, start_date, end_date, business_unit)
     holiday_set = set(holidays)
 
     # 2. Iterate and evaluate working boundaries explicitly

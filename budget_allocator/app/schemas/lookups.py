@@ -13,3 +13,7 @@ class LookupItemOut(BaseModel, Generic[T]):
     
     id: T
     name: str
+
+class FamilyLookupOut(LookupItemOut[T]):
+    """Lookup schema for Families that includes the generic business unit."""
+    business_unit: str

@@ -38,18 +38,18 @@ from app.models.models import (
     AuditLog,
     AuditAction,
     Budget,
-    Project,
+    Family,
     RateCard,
-    SubDivision,
+    Team,
 )
-from app.core.context import current_user_id, current_change_reason   # Fix #10: request-scoped actor ID
+from app.core.context import current_user_id, current_change_reason
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Models that we want to audit
 # ---------------------------------------------------------------------------
-AUDITABLE_MODELS = (Budget, Project, SubDivision, RateCard)
+AUDITABLE_MODELS = (Budget, Family, Team, RateCard)
 
 # ---------------------------------------------------------------------------
 # Helpers
