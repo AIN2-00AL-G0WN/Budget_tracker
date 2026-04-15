@@ -51,14 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1. Wire up automatic audit logging
     register_audit_listeners()
 
-    # 2. Trigger auto-seeding if projects table is empty
-    from app.core.database import AsyncSessionLocal
-    from app.core.setup_v1 import seed_initial_data
+    # (Database Seeding is handled via scripts/init_db.py before startup)
     
-    async with AsyncSessionLocal() as db:
-        await seed_initial_data(db)
-
-    # 3. Start the in-process scheduler
+    # 2. Start the in-process scheduler
     async with scheduler_lifespan():
         logger.info("🚀  %s v%s is ready", settings.app_name, settings.app_version)
         yield
