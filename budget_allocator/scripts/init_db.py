@@ -76,26 +76,30 @@ async def seed_admin(session: AsyncSession):
     logger.info(f"  Token: {setup_token}")
     logger.info("=" * 70)
 
-async def main():
-    # 1. Migrations must run first, structurally locking the event
-    run_migrations()
-
+async def seed_data():
     # 2. Database Session Initialization
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        async with session.begin():
-            # Seed System State (Families, Lookups, RateCards)
-            logger.info("Seeding system globals...")
-            await seed_initial_data(session)
-            
-            # Seed Admin User
-            logger.info("Verifying admin accounts...")
-            await seed_admin(session)
+        # Seed System State (Families, Lookups, RateCards)
+        logger.info("Seeding system globals...")
+        await seed_initial_data(session)
+        
+        # Seed Admin User
+        logger.info("Verifying admin accounts...")
+        await seed_admin(session)
+        await session.commit()
 
     await engine.dispose()
     logger.info("Initialization sequence completed successfully.")
 
+def main():
+    # 1. Migrations must run first
+    run_migrations()
+    
+    # 2. Run background seeding
+    asyncio.run(seed_data())
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
