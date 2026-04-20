@@ -50,13 +50,15 @@ def generate_excel_export(data: List[Any], sheet_name: str = "Export") -> io.Byt
         ("Manual HC cost", "manual_hc_cost", True),
         ("Automation HC cost", "automation_hc_cost", False),
         ("Lead Cost", "lead_cost", True),
+        ("Direct HC Cost", "direct_hc_cost", False),
         ("SQPM Cost of Boise 70%", "sqpm_cost_boise", False),
         ("PL-50%", "pl_cost", True),
         ("Per WQE - 40%", "per_wqe_cost", False),
         ("aSQPM - 80%", "asqpm_cost", True),
         ("Lab Techician & Manager - 40%", "lab_tech_manager_cost", False),
         ("Project Manager - 40%", "project_manager_cost", True),
-        ("", None, False), # Blank spacer row 22
+        ("Indirect HC Cost", "indirect_hc_cost", False),
+        ("", None, False), # Blank spacer
         ("Total Budget", "total_budget", False),
     ]
 

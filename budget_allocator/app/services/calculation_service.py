@@ -193,8 +193,8 @@ def calculate_budget(
     # ------------------------------------------------------------------
     # Step 3: Headcount (HC)
     # ------------------------------------------------------------------
-    # Manual HC: =SUM(manual_tc, total_tc) / (duration_wks * manual_hc_divisor)
-    manual_hc: Decimal = (manual_tc + total_tc) / (duration_wks * _rate("manual_hc_divisor", "manual_hc_divisor_override"))
+    # Manual HC: =(manual_tc + adhoc) / duration_in_days / manual_hc_divisor
+    manual_hc: Decimal = (manual_tc + adhoc) / (dur * _rate("manual_hc_divisor", "manual_hc_divisor_override"))
 
     # Automation HC: =automation_tc / automation_hc_divisor
     automation_hc: Decimal = automation_tc / _rate("automation_hc_divisor", "automation_hc_divisor_override")
@@ -239,12 +239,12 @@ def calculate_budget(
     project_manager_cost: Decimal = hrs * pm_rate * duration_wks * _rate("project_manager_pct", "project_manager_pct_override")
 
     # ------------------------------------------------------------------
-    # Step 5: Total Budget  (sum of all cost rows 13-21)
+    # Step 5: Summaries & Total Budget
     # ------------------------------------------------------------------
+    direct_hc_cost: Decimal = manual_hc_cost + automation_hc_cost + lead_cost
+    
     total_budget: Decimal = (
-        manual_hc_cost
-        + automation_hc_cost
-        + lead_cost
+        direct_hc_cost
         + sqpm_cost_boise
         + pl_cost
         + per_wqe_cost
@@ -252,6 +252,8 @@ def calculate_budget(
         + lab_tech_manager_cost
         + project_manager_cost
     )
+    
+    indirect_hc_cost: Decimal = total_budget - direct_hc_cost
 
     logger.debug(
         "Budget calculation complete: tc=%s days=%s total=%.2f",
@@ -280,6 +282,8 @@ def calculate_budget(
         "manual_hc_cost":       _r2(manual_hc_cost),
         "automation_hc_cost":   _r2(automation_hc_cost),
         "lead_cost":            _r2(lead_cost),
+        "direct_hc_cost":       _r2(direct_hc_cost),
+        "indirect_hc_cost":     _r2(indirect_hc_cost),
         "sqpm_cost_boise":      _r2(sqpm_cost_boise),
         "pl_cost":              _r2(pl_cost),
         "per_wqe_cost":         _r2(per_wqe_cost),

@@ -452,6 +452,9 @@ class Budget(Base):
     automation_hc_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lead_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    direct_hc_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    indirect_hc_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # ---- Additional cost lines (rows 16-21 from Demo.xlsx) ------------------
     sqpm_cost_boise: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # row 16: SQPM Cost of Boise 70%
     pl_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)           # row 17: PL-50%

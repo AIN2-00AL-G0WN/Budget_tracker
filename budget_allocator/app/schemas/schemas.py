@@ -491,6 +491,8 @@ class BudgetOut(_Base):
     manual_hc_cost: Optional[float]
     automation_hc_cost: Optional[float]
     lead_cost: Optional[float]
+    direct_hc_cost: Optional[float]
+    indirect_hc_cost: Optional[float]
     sqpm_cost_boise: Optional[float]
     pl_cost: Optional[float]
     per_wqe_cost: Optional[float]
