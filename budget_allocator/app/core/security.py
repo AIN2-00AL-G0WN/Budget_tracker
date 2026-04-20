@@ -50,7 +50,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 # JWT helpers
 # ---------------------------------------------------------------------------
 
-TokenKind = Literal["access", "refresh", "setup"]
+TokenKind = Literal["access", "refresh", "setup", "temp_mfa", "password_reset"]
 
 
 def _utc_now() -> datetime:
@@ -85,6 +85,10 @@ def create_token(
         delta = timedelta(minutes=settings.access_token_expire_minutes)
     elif kind == "refresh":
         delta = timedelta(days=settings.refresh_token_expire_days)
+    elif kind == "temp_mfa":
+        delta = timedelta(minutes=5)
+    elif kind == "password_reset":
+        delta = timedelta(minutes=10)
     else:  # setup
         delta = timedelta(hours=settings.setup_token_expire_hours)
 

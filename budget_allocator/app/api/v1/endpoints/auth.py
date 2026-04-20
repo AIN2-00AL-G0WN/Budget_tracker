@@ -45,9 +45,13 @@ from app.models.models import AuthEventType, AuthLog, User
 from app.schemas.schemas import (
     ChangePasswordRequest,
     ChangePasswordResponse,
-    ForgotPasswordRequest,
+    ForgotPasswordInitiateRequest,
+    ForgotPasswordInitiateResponse,
+    ForgotPasswordConfirmRequest,
     ForgotPasswordResponse,
     LoginRequest,
+    LoginMfaRequest,
+    LoginStep1Response,
     RefreshRequest,
     SetupAccountRequest,
     SetupAccountResponse,
@@ -103,33 +107,22 @@ async def get_current_user_profile(
 # POST /auth/login
 # ---------------------------------------------------------------------------
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse | LoginStep1Response)
 async def login(
     payload: LoginRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> TokenResponse:
+) -> TokenResponse | LoginStep1Response:
     """
-    Authenticate a user and return a JWT access + refresh token pair.
-
-    Flow
-    ----
-    1. Opportunistically purge expired consumed TOTP codes (maintenance).
-    2. Look up the user by username.
-    3. Always verify a password hash (Fix #5 — constant time, no enumeration).
-    4. If the user has TOTP enabled, validate the code and check replay (Fix #3).
-    5. Mint and return tokens.
+    Authenticate a user (Step 1).
+    Returns setup_required or mfa_required status if applicable.
     """
     ip = _get_ip(request)
-
-    # Fix #3: Purge stale replay-prevention records opportunistically
-    await crud_totp.purge_expired_codes(db)
 
     result = await db.execute(select(User).where(User.username == payload.username))
     user: User | None = result.scalar_one_or_none()
 
     # Fix #5: Always call verify_password — prevents timing oracle.
-    # If the user doesn't exist, verify against the dummy hash (always False).
     candidate_hash = user.hashed_password if user else _DUMMY_HASH
     password_ok = verify_password(payload.password, candidate_hash)
 
@@ -145,30 +138,116 @@ async def login(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
-    # TOTP check — only enforced once MFA setup is complete
+    # If first time user, require setup
+    if user.requires_password_change:
+        setup_token = create_token(
+            user_id=user.id,
+            kind="setup",
+            token_version=user.token_version,
+        )
+        return LoginStep1Response(
+            status="setup_required",
+            token=setup_token,
+            message="Initial setup is required. Please follow the setup link.",
+        )
+
+    # If TOTP is enabled (standard login)
     if user.totp_secret:
-        if not payload.totp_code:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="TOTP code required for this account",
-            )
-        if not verify_totp_code(user.totp_secret, payload.totp_code):
-            await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid TOTP code",
-            )
-        # Fix #3: Reject replayed TOTP codes (same code used within 90s)
-        if await crud_totp.is_code_consumed(db, user.id, payload.totp_code):
-            await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="TOTP code has already been used. Wait for the next code.",
-            )
-        # Mark code as consumed so it cannot be replayed
-        await crud_totp.consume_code(db, user.id, payload.totp_code)
+        temp_token = create_token(
+            user_id=user.id,
+            kind="temp_mfa",
+            token_version=user.token_version,
+        )
+        return LoginStep1Response(
+            status="mfa_required",
+            token=temp_token,
+            message="MFA is required. Please submit your TOTP code to /auth/login/mfa.",
+        )
+
+    # Fallback if no MFA setup and somehow doesn't require password change (legacy or special accounts)
+    await _log_auth_event(db, user.id, AuthEventType.LOGIN_SUCCESS, ip)
+
+    access_token = create_token(
+        user_id=user.id,
+        kind="access",
+        token_version=user.token_version,
+        username=user.username,
+        is_admin=user.is_admin,
+    )
+    refresh_token = create_token(
+        user_id=user.id,
+        kind="refresh",
+        token_version=user.token_version,
+    )
+    await db.commit()
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/login/mfa
+# ---------------------------------------------------------------------------
+
+@router.post("/login/mfa", response_model=TokenResponse)
+async def login_mfa(
+    payload: LoginMfaRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """
+    Step 2 of the login flow: verify TOTP using the temp_token.
+    """
+    ip = _get_ip(request)
+
+    # Purge stale replay-prevention records opportunistically
+    await crud_totp.purge_expired_codes(db)
+
+    import uuid as _uuid
+    try:
+        data = decode_token(payload.temp_token)
+        if data.get("kind") != "temp_mfa":
+            raise ValueError("Not a temp_mfa token")
+        user_id_str: str = data["sub"]
+        token_ver: int = data["ver"]
+        user_id = _uuid.UUID(user_id_str)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired temporary session. Please log in again.",
+        )
+
+    user: User | None = await crud_user.get_user_by_id(db, user_id)
+
+    if user is None or not user.is_active or user.token_version != token_ver:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session invalidated. Please log in again.",
+        )
+
+    if not user.totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled for this account.",
+        )
+
+    if not verify_totp_code(user.totp_secret, payload.totp_code):
+        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid TOTP code",
+        )
+
+    # Reject replayed TOTP codes (same code used within 90s)
+    if await crud_totp.is_code_consumed(db, user.id, payload.totp_code):
+        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="TOTP code has already been used. Wait for the next code.",
+        )
+
+    # Mark code as consumed so it cannot be replayed
+    await crud_totp.consume_code(db, user.id, payload.totp_code)
 
     await _log_auth_event(db, user.id, AuthEventType.LOGIN_SUCCESS, ip)
 
@@ -184,6 +263,7 @@ async def login(
         kind="refresh",
         token_version=user.token_version,
     )
+    await db.commit()
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
 
@@ -389,27 +469,15 @@ async def change_password(
 # POST /auth/forgot-password
 # ---------------------------------------------------------------------------
 
-@router.post("/forgot-password", response_model=ForgotPasswordResponse)
-async def forgot_password(
-    payload: ForgotPasswordRequest,
+@router.post("/forgot-password/initiate", response_model=ForgotPasswordInitiateResponse)
+async def forgot_password_initiate(
+    payload: ForgotPasswordInitiateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> ForgotPasswordResponse:
+) -> ForgotPasswordInitiateResponse:
     """
-    Self-service password reset using TOTP as proof-of-identity.
-
-    Flow
-    ----
-    1. Purge stale consumed TOTP codes (opportunistic maintenance).
-    2. Look up the user by username (constant-time guard against enumeration).
-    3. Verify the 6-digit TOTP code — reject if invalid or already consumed.
-    4. Mark the code consumed to prevent replay within the 90-second window.
-    5. Hash the new password and persist it.
-    6. Increment ``token_version`` — ALL existing access/refresh tokens for
-       this user are immediately invalidated (no denylist required).
-    7. Log a ``PASSWORD_RESET`` audit event.
-
-    No current password is required; the Authenticator code proves identity.
+    Step 1 of self-service password reset.
+    Validates identity via TOTP and issues a temporary reset token.
     """
     ip = _get_ip(request)
 
@@ -420,14 +488,8 @@ async def forgot_password(
     result = await db.execute(select(User).where(User.username == payload.username))
     user: User | None = result.scalar_one_or_none()
 
-    if user is None:
-        logger.debug("[forgot-password] User not found for username: %r", payload.username)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password reset failed: check username and authentication code.",
-        )
-    if not user.is_active:
-        logger.debug("[forgot-password] User %r is inactive", payload.username)
+    if user is None or not user.is_active:
+        logger.debug("[forgot-password] User not found or inactive for username: %r", payload.username)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password reset failed: check username and authentication code.",
@@ -442,11 +504,6 @@ async def forgot_password(
 
     # Step 3a: validate the TOTP code
     if not verify_totp_code(user.totp_secret, payload.totp_code):
-        logger.debug(
-            "[forgot-password] Invalid TOTP code for user %r (code: %s)",
-            user.username,
-            payload.totp_code,
-        )
         await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
         await db.commit()
         raise HTTPException(
@@ -465,20 +522,64 @@ async def forgot_password(
 
     # Step 4: consume the code so it cannot be replayed
     await crud_totp.consume_code(db, user.id, payload.totp_code)
+    await db.commit()
 
-    # Step 5: update password
+    # Step 5: Issue reset token
+    reset_token = create_token(
+        user_id=user.id,
+        kind="password_reset",
+        token_version=user.token_version,
+    )
+    
+    return ForgotPasswordInitiateResponse(reset_token=reset_token)
+
+
+@router.post("/forgot-password/confirm", response_model=ForgotPasswordResponse)
+async def forgot_password_confirm(
+    payload: ForgotPasswordConfirmRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> ForgotPasswordResponse:
+    """
+    Step 2 of self-service password reset.
+    Validates reset token and sets the new password.
+    """
+    ip = _get_ip(request)
+    
+    import uuid as _uuid
+    try:
+        data = decode_token(payload.reset_token)
+        if data.get("kind") != "password_reset":
+            raise ValueError("Not a password_reset token")
+        user_id_str: str = data["sub"]
+        token_ver: int = data["ver"]
+        user_id = _uuid.UUID(user_id_str)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset token. Please request a new password reset.",
+        )
+
+    user: User | None = await crud_user.get_user_by_id(db, user_id)
+
+    if user is None or not user.is_active or user.token_version != token_ver:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Reset session invalidated. Please request a new password reset.",
+        )
+
+    # Set new password
     user.hashed_password = hash_password(payload.new_password)
 
-    # Step 6: bump token_version — all existing JWTs for this user are now invalid
+    # Bump token_version — ALL existing JWTs (and this reset_token itself) are now invalid
     user.token_version += 1
     user.requires_password_change = False
     db.add(user)
 
-    # Step 7: audit trail
     await _log_auth_event(db, user.id, AuthEventType.PASSWORD_RESET, ip)
     await _log_auth_event(db, user.id, AuthEventType.TOKEN_INVALIDATED, None)
-
     await db.commit()
-    logger.info("User %s successfully reset their password via TOTP", user.username)
+    
+    logger.info("User %s successfully reset their password", user.username)
 
     return ForgotPasswordResponse()

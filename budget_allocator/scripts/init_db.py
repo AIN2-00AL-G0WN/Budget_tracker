@@ -31,9 +31,6 @@ from app.models.models import User
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s | %(message)s")
 logger = logging.getLogger("InitDB")
 
-ADMIN_USERNAME = "tejasbhat2001@gmail.com"
-ADMIN_PASSWORD = "Rdl@12345"
-
 def run_migrations():
     """Run Alembic migrations synchronously."""
     logger.info("Executing Alembic migrations...")
@@ -44,18 +41,18 @@ def run_migrations():
 async def seed_admin(session: AsyncSession):
     """Seed the default Admin user safely."""
     result = await session.execute(
-        select(User).where(User.username == ADMIN_USERNAME)
+        select(User).where(User.username == settings.admin_username)
     )
     existing = result.scalar_one_or_none()
 
     if existing:
-        logger.info(f"Admin User '{ADMIN_USERNAME}' already exists. Skipping.")
+        logger.info(f"Admin User '{settings.admin_username}' already exists. Skipping.")
         return
 
     # Create the admin user
     user = User(
-        username=ADMIN_USERNAME,
-        hashed_password=hash_password(ADMIN_PASSWORD),
+        username=settings.admin_username,
+        hashed_password=hash_password(settings.admin_password),
         is_admin=True,
         is_active=True,
         requires_password_change=True,
@@ -66,12 +63,12 @@ async def seed_admin(session: AsyncSession):
     await session.flush()
     
     # Generate setup token
-    setup_token = create_token(user.id, kind="setup", token_version=user.token_version)
+    setup_token = create_token(user_id=user.id, kind="setup", token_version=user.token_version)
     
     logger.info("=" * 70)
     logger.info("  [!] INITIAL SETUP REQUIRED")
     logger.info("=" * 70)
-    logger.info(f"  System created default admin user: {ADMIN_USERNAME}")
+    logger.info(f"  System created default admin user: {settings.admin_username}")
     logger.info("  Please complete MFA Setup via API (valid for 72h):")
     logger.info(f"  Token: {setup_token}")
     logger.info("=" * 70)

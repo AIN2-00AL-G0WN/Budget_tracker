@@ -57,12 +57,22 @@ class RefreshRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8)
-    totp_code: Optional[str] = Field(
-        default=None,
+
+
+class LoginMfaRequest(BaseModel):
+    temp_token: str = Field(..., description="Short-lived token received from step 1")
+    totp_code: str = Field(
+        ...,
         min_length=6,
         max_length=6,
-        description="6-digit TOTP code — required once MFA is enabled for the user",
+        description="6-digit TOTP code",
     )
+
+
+class LoginStep1Response(BaseModel):
+    status: str = Field(..., description="'mfa_required' or 'setup_required'")
+    token: str = Field(..., description="The temporary or setup token to use in the next step")
+    message: str
 
 
 class SetupAccountRequest(BaseModel):
@@ -99,15 +109,27 @@ class SetupAccountResponse(BaseModel):
 
 
 
-class ForgotPasswordRequest(BaseModel):
+class ForgotPasswordInitiateRequest(BaseModel):
     """
-    Self-service password reset using TOTP as proof-of-identity.
-    No current password required — the authenticator code replaces it.
+    Step 1: Prove identity using username and TOTP.
     """
     username: str = Field(..., min_length=3, max_length=64)
+    totp_code: str = Field(..., min_length=6, max_length=6, description="6-digit code from your Authenticator app")
+
+
+class ForgotPasswordInitiateResponse(BaseModel):
+    """Returned after successfully verifying identity for password reset."""
+    reset_token: str = Field(..., description="Short-lived token to authorize the new password submission")
+    message: str = "Identity verified. Please submit your new password."
+
+
+class ForgotPasswordConfirmRequest(BaseModel):
+    """
+    Step 2: Submit the new password authorized by the reset_token.
+    """
+    reset_token: str = Field(..., description="Token received from the initiate step")
     new_password: str = Field(..., min_length=12, max_length=128)
     confirm_password: str = Field(..., min_length=12, max_length=128)
-    totp_code: str = Field(..., min_length=6, max_length=6, description="6-digit code from your Authenticator app")
 
     @field_validator("new_password")
     @classmethod
@@ -126,7 +148,7 @@ class ForgotPasswordRequest(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _passwords_match(self) -> "ForgotPasswordRequest":
+    def _passwords_match(self) -> "ForgotPasswordConfirmRequest":
         if self.new_password != self.confirm_password:
             raise ValueError("new_password and confirm_password do not match")
         return self

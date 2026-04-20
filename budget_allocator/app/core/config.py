@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     totp_issuer: str = "BudgetAllocator"  # Displayed in Authenticator apps
 
+    # ------------------------------------------------------------------
+    # Initial Admin Seeding
+    # ------------------------------------------------------------------
+    admin_username: str = "tejasbhat2001@gmail.com"
+    admin_password: str = "Rdl@12345"
+
 
 # Singleton — import this in other modules
 settings = Settings()
