@@ -211,6 +211,43 @@ class AuthLog(Base):
 # Families  ➜  Teams  ➜  Runs  ➜  Budgets
 # ===========================================================================
 
+class BusinessUnit(Base):
+    """
+    Layer 1 of the hierarchy: a Business Unit.
+    e.g. "CPE", "ISB", "HIPS"
+    """
+    __tablename__ = "business_units"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    families: Mapped[list["Family"]] = relationship(
+        "Family",
+        back_populates="business_unit",
+        cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<BusinessUnit id={self.id!s:.8} name={self.name!r}>"
+
+
 class Family(Base):
     """
     Layer 2 of the hierarchy: a Product Family within a Business Unit.
@@ -219,7 +256,7 @@ class Family(Base):
 
     __tablename__ = "families"
     __table_args__ = (
-        UniqueConstraint("business_unit", "name", name="uix_families_bu_name"),
+        UniqueConstraint("business_unit_id", "name", name="uix_families_bu_name"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -228,7 +265,12 @@ class Family(Base):
         default=uuid.uuid4,
     )
     name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
-    business_unit: Mapped[str] = mapped_column(String(128), index=True, nullable=False, server_default="Default")
+    business_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("business_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     status: Mapped[FamilyStatus] = mapped_column(
         SAEnum(FamilyStatus, name="family_status", create_type=True),
         default=FamilyStatus.ACTIVE,
@@ -252,6 +294,10 @@ class Family(Base):
     )
 
     # Relationships
+    business_unit: Mapped["BusinessUnit"] = relationship(
+        "BusinessUnit",
+        back_populates="families"
+    )
     teams: Mapped[list["Team"]] = relationship(
         "Team",
         back_populates="family",
@@ -589,9 +635,17 @@ class CompanyHoliday(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     holiday_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    business_unit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    business_unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("business_units.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     description: Mapped[str] = mapped_column(String(256), nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Relationships
+    business_unit: Mapped[Optional["BusinessUnit"]] = relationship("BusinessUnit")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CompanyHoliday id={self.id} date={self.holiday_date}>"

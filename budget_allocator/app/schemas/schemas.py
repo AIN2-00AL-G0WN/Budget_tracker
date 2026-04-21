@@ -263,12 +263,32 @@ class ResetLinkResponse(BaseModel):
 
 
 # ===========================================================================
+# Business Unit schemas
+# ===========================================================================
+
+class BusinessUnitCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=128)
+
+
+class BusinessUnitUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=128)
+
+
+class BusinessUnitOut(_Base):
+    id: uuid.UUID
+    name: str
+    is_deleted: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# ===========================================================================
 # Family schemas (formerly Project)
 # ===========================================================================
 
 class FamilyCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=256)
-    business_unit: str = Field(..., min_length=2, max_length=128)
+    business_unit_id: uuid.UUID
     status: str = "ACTIVE"
 
     @field_validator("status")
@@ -282,7 +302,7 @@ class FamilyCreate(BaseModel):
 
 class FamilyUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
-    business_unit: Optional[str] = Field(default=None, min_length=2, max_length=128)
+    business_unit_id: Optional[uuid.UUID] = None
     status: Optional[str] = None
 
     @field_validator("status")
@@ -299,7 +319,7 @@ class FamilyUpdate(BaseModel):
 class FamilyOut(_Base):
     id: uuid.UUID
     name: str
-    business_unit: str
+    business_unit_id: uuid.UUID
     status: str
     is_deleted: bool
     created_at: datetime
@@ -654,15 +674,18 @@ class RateCardOut(_Base):
 
 class CompanyHolidayCreate(BaseModel):
     holiday_date: date
+    business_unit_id: Optional[uuid.UUID] = None
     description: str = Field(..., min_length=2, max_length=256)
 
 class CompanyHolidayUpdate(BaseModel):
     holiday_date: Optional[date] = None
+    business_unit_id: Optional[uuid.UUID] = None
     description: Optional[str] = Field(default=None, min_length=2, max_length=256)
 
 class CompanyHolidayOut(_Base):
     id: int
     holiday_date: date
+    business_unit_id: Optional[uuid.UUID]
     description: str
     is_deleted: bool
 

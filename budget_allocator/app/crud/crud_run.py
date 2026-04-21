@@ -22,7 +22,7 @@ def _apply_budget_filters(stmt, filters: BudgetFilterParams):
     from app.models.models import Budget
     from sqlalchemy import or_, and_
 
-    stmt = stmt.join(Budget, Budget.run_id == Run.id).where(Budget.is_deleted == False)  # noqa: E712
+    stmt = stmt.outerjoin(Budget, and_(Budget.run_id == Run.id, Budget.is_deleted == False))  # noqa: E712
 
     if filters.min_total_cost is not None:
         stmt = stmt.where(Budget.total_budget >= filters.min_total_cost)

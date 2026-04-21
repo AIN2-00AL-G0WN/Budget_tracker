@@ -30,7 +30,7 @@ class BudgetFilterParams(BaseModel):
 
 class WorkflowFilterParams(BaseModel):
     status: str | None = Field(default=None, description="Filter by status")
-    business_unit: str | None = Field(default=None, description="Filter by business unit")
+    business_unit_id: uuid.UUID | None = Field(default=None, description="Filter by business unit ID")
 
 
 def get_audit_filters(
@@ -65,9 +65,9 @@ def get_budget_filters(
 
 def get_workflow_filters(
     status: str | None = Query(None, description="Filter teams/status"),
-    business_unit: str | None = Query(None, description="Filter from top level BU"),
+    business_unit_id: uuid.UUID | None = Query(None, description="Filter from top level BU ID"),
 ) -> WorkflowFilterParams:
     return WorkflowFilterParams(
         status=status,
-        business_unit=business_unit,
+        business_unit_id=business_unit_id,
     )

@@ -40,15 +40,15 @@ async def get_all_families(
 async def get_all_families_paginated(
     db: AsyncSession,
     *,
-    business_unit: str | None = None,
+    business_unit_id: uuid.UUID | None = None,
     limit: int = 50,
     offset: int = 0,
     load_teams: bool = False,
 ) -> Sequence[Family]:
     """Return a paginated slice of non-deleted families."""
     stmt = select(Family).where(Family.is_deleted == False)  # noqa: E712
-    if business_unit:
-        stmt = stmt.where(Family.business_unit == business_unit)
+    if business_unit_id:
+        stmt = stmt.where(Family.business_unit_id == business_unit_id)
     if load_teams:
         stmt = stmt.options(selectinload(Family.teams.and_(Team.is_deleted == False)))
     stmt = stmt.order_by(Family.created_at).limit(limit).offset(offset)
@@ -56,11 +56,11 @@ async def get_all_families_paginated(
     return result.scalars().all()
 
 
-async def count_active_families(db: AsyncSession, business_unit: str | None = None) -> int:
+async def count_active_families(db: AsyncSession, business_unit_id: uuid.UUID | None = None) -> int:
     """Return the total count of non-deleted families."""
     stmt = select(func.count()).select_from(Family).where(Family.is_deleted == False)  # noqa: E712
-    if business_unit:
-        stmt = stmt.where(Family.business_unit == business_unit)
+    if business_unit_id:
+        stmt = stmt.where(Family.business_unit_id == business_unit_id)
     result = await db.execute(stmt)
     return result.scalar_one()
 
@@ -152,9 +152,9 @@ async def get_family_budget_summary(
 def _apply_workflow_filters(stmt, filters: WorkflowFilterParams):
     if filters.status:
         stmt = stmt.where(Team.status == filters.status)
-    if filters.business_unit:
+    if filters.business_unit_id:
         stmt = stmt.join(Family, Family.id == Team.family_id)
-        stmt = stmt.where(Family.business_unit == filters.business_unit)
+        stmt = stmt.where(Family.business_unit_id == filters.business_unit_id)
     return stmt
 
 

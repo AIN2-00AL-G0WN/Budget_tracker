@@ -38,11 +38,35 @@ SEED_RATE_CARDS = [
 
 
 async def seed_initial_data(db: AsyncSession) -> None:
+    from app.models.models import BusinessUnit
+    
+    # 0. Extract unique Business Units and seed them
+    unique_bus = list(set(proj["business_unit"] for proj in SEED_PROJECTS))
+    bu_id_map = {}
+    for bu_name in unique_bus:
+        result = await db.execute(select(BusinessUnit).where(BusinessUnit.name == bu_name))
+        existing_bu = result.scalar_one_or_none()
+        
+        if existing_bu is None:
+            logger.info("Seeding new Business Unit: %s", bu_name)
+            new_bu = BusinessUnit(name=bu_name)
+            db.add(new_bu)
+            await db.flush()
+            bu_id_map[bu_name] = new_bu.id
+        else:
+            if existing_bu.is_deleted:
+                logger.info("Reactivating soft-deleted Business Unit: %s", bu_name)
+                existing_bu.is_deleted = False
+                db.add(existing_bu)
+                await db.flush()
+            bu_id_map[bu_name] = existing_bu.id
+
     # 1. Seed each required project — reactivate if soft-deleted, create if missing entirely
     for proj in SEED_PROJECTS:
+        bu_id = bu_id_map[proj["business_unit"]]
         result = await db.execute(
             select(Family).where(
-                Family.business_unit == proj["business_unit"],
+                Family.business_unit_id == bu_id,
                 Family.name == proj["name"],
             ).limit(1)
         )
@@ -51,7 +75,7 @@ async def seed_initial_data(db: AsyncSession) -> None:
         if existing is None:
             # Truly new — insert it
             logger.info("Seeding new family: [%s] %s", proj["business_unit"], proj["name"])
-            db.add(Family(business_unit=proj["business_unit"], name=proj["name"], status="ACTIVE"))
+            db.add(Family(business_unit_id=bu_id, name=proj["name"], status="ACTIVE"))
         elif existing.is_deleted:
             # Soft-deleted — reactivate it
             logger.info("Reactivating soft-deleted family: [%s] %s", proj["business_unit"], proj["name"])
