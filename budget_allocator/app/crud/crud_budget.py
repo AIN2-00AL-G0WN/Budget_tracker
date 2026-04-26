@@ -109,11 +109,15 @@ async def get_budget_for_run(
     """
     Return the Budget associated with a given Run, or None.
     Used to enforce the one-budget-per-run rule before a POST.
+
+    NOTE: We intentionally do NOT filter by is_deleted here because the
+    database enforces an absolute unique index on run_id (not a partial
+    index). If a soft-deleted budget exists, we must detect it so the
+    endpoint can return a clear 409 instead of a raw IntegrityError.
     """
     result = await db.execute(
         select(Budget).where(
             Budget.run_id == run_id,
-            Budget.is_deleted == False,  # noqa: E712
         )
     )
     return result.scalar_one_or_none()

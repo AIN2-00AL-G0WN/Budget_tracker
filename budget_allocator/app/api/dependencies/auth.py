@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import decode_token, verify_token_kind
-from app.core.context import current_user_id   # Fix #10
+from app.core.context import current_user_id, current_username   # Fix #10
 from app.crud import crud_user
 from app.models.models import User
 
@@ -72,6 +72,7 @@ async def _get_user_from_token(
     # Fix #10: Populate the request-scoped context var so audit_logger can
     # record who performed the action without needing an HTTP request reference.
     current_user_id.set(user.id)
+    current_username.set(user.username)
     return user
 
 

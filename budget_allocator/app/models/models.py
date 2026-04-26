@@ -82,6 +82,16 @@ class AuditAction(str, enum.Enum):
     DELETE = "DELETE"
 
 
+class AdminActionType(str, enum.Enum):
+    """Explicit admin intent actions — recorded regardless of ORM events."""
+    USER_PROVISION          = "USER_PROVISION"           # Admin created a new user
+    USER_UPDATE             = "USER_UPDATE"               # Admin updated user profile/role
+    USER_DELETE             = "USER_DELETE"               # Admin soft-deleted a user
+    USER_ACTIVATE           = "USER_ACTIVATE"             # Admin activated a user
+    USER_DEACTIVATE         = "USER_DEACTIVATE"           # Admin deactivated a user
+    USER_PASSWORD_RESET     = "USER_PASSWORD_RESET"       # Admin issued a password reset link
+
+
 # ===========================================================================
 # Users
 # ===========================================================================
@@ -164,6 +174,11 @@ class User(Base):
     audit_logs: Mapped[list["AuditLog"]] = relationship(
         "AuditLog",
         back_populates="actor"
+    )
+    admin_action_logs: Mapped[list["AdminActionLog"]] = relationship(
+        "AdminActionLog",
+        back_populates="actor",
+        foreign_keys="AdminActionLog.actor_id",
     )
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -700,6 +715,11 @@ class AuditLog(Base):
         nullable=True,
         index=True,
     )
+    username: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="Denormalized username for quick log readability",
+    )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -760,6 +780,90 @@ class ConsumedTOTPCode(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ConsumedTOTPCode user={self.user_id!s:.8} code={self.code}>"
+
+
+# ===========================================================================
+# Admin Action Logs
+# ===========================================================================
+
+class AdminActionLog(Base):
+    """
+    Human-readable record of every deliberate admin management action.
+
+    Unlike `audit_logs` (which captures raw ORM diffs), this table captures
+    *intent*: who decided to do what to whom, and what changed as a result.
+    It answers compliance questions like:
+      "Who granted admin rights to alice, and when?"
+      "Which admin issued the last password-reset link for bob?"
+
+    Design: append-only, never update or delete rows.
+    """
+
+    __tablename__ = "admin_action_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    # Who performed the action
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    actor_name: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="Denormalized admin username at time of action",
+    )
+
+    # What action was taken
+    action: Mapped[AdminActionType] = mapped_column(
+        SAEnum(AdminActionType, name="admin_action_type", create_type=True),
+        nullable=False,
+        index=True,
+    )
+
+    # Who/what was affected
+    target_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+        comment="UUID of the affected user (or entity)",
+    )
+    target_name: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="Denormalized target username at time of action",
+    )
+
+    # Structured diff / detail
+    detail: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="Structured details e.g. {old_role: false, new_role: true}",
+    )
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    # Relationships
+    actor: Mapped[Optional["User"]] = relationship(
+        "User",
+        back_populates="admin_action_logs",
+        foreign_keys=[actor_id],
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<AdminActionLog id={self.id} "
+            f"actor={self.actor_name!r} "
+            f"action={self.action.value} "
+            f"target={self.target_name!r}>"
+        )
 
 
 # ===========================================================================

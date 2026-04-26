@@ -132,3 +132,46 @@ async def rotate_token_version(db: AsyncSession, user: User) -> User:
     db.add(user)
     await db.flush()
     return user
+
+
+async def update_user(
+    db: AsyncSession,
+    user: User,
+    *,
+    username: str | None = None,
+    is_admin: bool | None = None,
+    is_active: bool | None = None,
+) -> User:
+    """
+    Update mutable user profile fields.
+
+    Increments ``token_version`` to invalidate existing JWTs whenever
+    security-sensitive fields change (is_admin, is_active).
+    """
+    if username is not None:
+        user.username = username
+    if is_admin is not None:
+        user.is_admin = is_admin
+        user.token_version += 1  # role change → invalidate tokens
+    if is_active is not None:
+        user.is_active = is_active
+        if not is_active:
+            user.token_version += 1  # deactivation → invalidate tokens
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+async def soft_delete_user(db: AsyncSession, user: User) -> None:
+    """
+    Soft-delete a user by deactivating and clearing their credentials.
+
+    This is a non-reversible administrative action. The user's tokens
+    are immediately invalidated.
+    """
+    user.is_active = False
+    user.token_version += 1
+    user.totp_secret = None
+    db.add(user)
+    await db.flush()

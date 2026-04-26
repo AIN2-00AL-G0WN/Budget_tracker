@@ -24,7 +24,7 @@ from app.api.dependencies.auth import get_current_user
 from app.core.context import current_change_reason
 from app.core.database import get_db
 from app.crud import crud_budget, crud_notification, crud_run, crud_holiday
-from app.models.models import User, Run, Team, Family
+from app.models.models import User, Run, Team, Family, BusinessUnit
 from sqlalchemy import select
 from app.schemas.schemas import (
     BudgetCreate,
@@ -99,7 +99,14 @@ async def create_budget(
     tc_count = payload.tc_count
     
     # Calculate expected duration using the new calendar logic
-    stmt = select(Family.business_unit).select_from(Run).join(Team).join(Family).where(Run.id == run_id)
+    stmt = (
+        select(BusinessUnit.name)
+        .select_from(Run)
+        .join(Team, Run.team_id == Team.id)
+        .join(Family, Team.family_id == Family.id)
+        .join(BusinessUnit, Family.business_unit_id == BusinessUnit.id)
+        .where(Run.id == run_id)
+    )
     bu_result = await db.execute(stmt)
     business_unit = bu_result.scalar_one()
 
@@ -354,7 +361,14 @@ async def update_budget(
         await db.flush()
 
     # Calculate expected duration using the new calendar logic
-    stmt = select(Family.business_unit).select_from(Run).join(Team).join(Family).where(Run.id == budget.run_id)
+    stmt = (
+        select(BusinessUnit.name)
+        .select_from(Run)
+        .join(Team, Run.team_id == Team.id)
+        .join(Family, Team.family_id == Family.id)
+        .join(BusinessUnit, Family.business_unit_id == BusinessUnit.id)
+        .where(Run.id == budget.run_id)
+    )
     bu_result = await db.execute(stmt)
     business_unit = bu_result.scalar_one()
 

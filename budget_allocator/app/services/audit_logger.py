@@ -38,18 +38,22 @@ from app.models.models import (
     AuditLog,
     AuditAction,
     Budget,
+    BusinessUnit,
     Family,
     RateCard,
+    Run,
     Team,
 )
-from app.core.context import current_user_id, current_change_reason
+from app.core.context import current_user_id, current_change_reason, current_username
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Models that we want to audit
+# Models that we want to audit — one entry per enterprise hierarchy level:
+#   L1: BusinessUnit  L2: Family  L3: Team  L4: Run  L5: Budget
+#   + global RateCard settings
 # ---------------------------------------------------------------------------
-AUDITABLE_MODELS = (Budget, Family, Team, RateCard)
+AUDITABLE_MODELS = (BusinessUnit, Family, Team, Run, Budget, RateCard)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -126,6 +130,7 @@ def _write_audit_row(
         old_value=old_value,
         new_value=new_value,
         user_id=current_user_id.get(),   # Fix #10: populated from request context
+        username=current_username.get(),  # Denormalized for log readability
         change_reason=current_change_reason.get(),
     )
     connection.execute(stmt)

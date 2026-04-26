@@ -38,3 +38,10 @@ current_change_reason: ContextVar[Optional[str]] = ContextVar(
     "current_change_reason",
     default=None,
 )
+
+# Holds the username of the currently authenticated user — denormalized into
+# AuditLog rows for quick readability without joining the users table.
+current_username: ContextVar[Optional[str]] = ContextVar(
+    "current_username",
+    default=None,
+)

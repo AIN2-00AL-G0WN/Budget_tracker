@@ -24,11 +24,19 @@ async def get_all_holidays(db: AsyncSession) -> Sequence[CompanyHoliday]:
 async def get_holidays_in_range(db: AsyncSession, start_date: date, end_date: date, business_unit: str) -> list[date]:
     """Return a list of dates representing actual company holidays within a specific date range."""
     from sqlalchemy import or_
+    from app.models.models import BusinessUnit
+
+    # Resolve the BU name to its UUID
+    bu_result = await db.execute(
+        select(BusinessUnit.id).where(BusinessUnit.name == business_unit)
+    )
+    bu_id = bu_result.scalar_one_or_none()
+
     stmt = select(CompanyHoliday.holiday_date).where(
         CompanyHoliday.is_deleted == False,
         CompanyHoliday.holiday_date >= start_date,
         CompanyHoliday.holiday_date <= end_date,
-        or_(CompanyHoliday.business_unit.is_(None), CompanyHoliday.business_unit == business_unit)
+        or_(CompanyHoliday.business_unit_id.is_(None), CompanyHoliday.business_unit_id == bu_id)
     ).order_by(CompanyHoliday.holiday_date)
     result = await db.execute(stmt)
     return list(result.scalars().all())

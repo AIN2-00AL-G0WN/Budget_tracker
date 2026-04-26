@@ -221,7 +221,14 @@ class ChangePasswordResponse(BaseModel):
 class UserProvisionRequest(BaseModel):
     """Admin hits POST /users/provision with this payload."""
     username: str = Field(..., min_length=3, max_length=64)
-    is_admin: bool = False
+    is_admin: bool = True
+
+
+class UserUpdate(BaseModel):
+    """Admin hits PATCH /admin/users/{id} with this payload."""
+    username: Optional[str] = Field(None, min_length=3, max_length=64)
+    is_admin: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 
 class UserProvisionResponse(BaseModel):
@@ -701,6 +708,8 @@ class AuditLogOut(_Base):
     old_value: Optional[dict]
     new_value: Optional[dict]
     user_id: Optional[uuid.UUID]
+    username: Optional[str]
+    change_reason: Optional[str]
     timestamp: datetime
 
 
@@ -718,3 +727,19 @@ class NotificationOut(_Base):
 
 class NotificationMarkRead(BaseModel):
     notification_ids: list[int] = Field(..., min_length=1)
+
+
+# ===========================================================================
+# Admin Action Log schemas
+# ===========================================================================
+
+class AdminActionLogOut(_Base):
+    """Returned from GET /admin/action-logs — one row per admin management action."""
+    id: int
+    actor_id: Optional[uuid.UUID]
+    actor_name: Optional[str]
+    action: str
+    target_id: Optional[uuid.UUID]
+    target_name: Optional[str]
+    detail: Optional[dict]
+    timestamp: datetime

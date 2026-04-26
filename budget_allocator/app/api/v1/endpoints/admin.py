@@ -30,7 +30,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -38,8 +38,9 @@ from app.api.dependencies.auth import get_current_admin_user
 from app.core.database import get_db
 from app.core.security import create_token, hash_password
 from app.crud import crud_rate_card, crud_user, crud_audit
-from app.models.models import AuditLog, User
+from app.models.models import AuditLog, Budget, User
 from app.schemas.schemas import (
+    AdminActionLogOut,
     AuditLogOut,
     PaginatedResponse,
     RateCardCreate,
@@ -49,7 +50,10 @@ from app.schemas.schemas import (
     UserOut,
     UserProvisionRequest,
     UserProvisionResponse,
+    UserUpdate,
 )
+from app.models.models import AdminActionLog, AdminActionType
+from app.services.admin_logger import log_admin_action
 from app.services.calculation_service import REQUIRED_RATE_KEYS
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -107,6 +111,14 @@ async def provision_user(
         kind="setup",
         token_version=new_user.token_version,
     )
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_PROVISION,
+        target_id=new_user.id,
+        target_name=new_user.username,
+        detail={"is_admin": new_user.is_admin},
+    )
     logger.info("Admin %s provisioned user %s", admin.username, new_user.username)
     return UserProvisionResponse(
         user_id=new_user.id,
@@ -136,6 +148,13 @@ async def reset_user_password(
         user_id=user.id,
         kind="setup",
         token_version=user.token_version,
+    )
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_PASSWORD_RESET,
+        target_id=user.id,
+        target_name=user.username,
     )
     logger.info("Admin %s reset password for user %s", admin.username, user.username)
     return ResetLinkResponse(setup_token=setup_token)
@@ -169,7 +188,115 @@ async def toggle_user_active(
             detail="Cannot deactivate your own account",
         )
     user = await crud_user.set_active(db, user, is_active=is_active)
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_ACTIVATE if is_active else AdminActionType.USER_DEACTIVATE,
+        target_id=user.id,
+        target_name=user.username,
+        detail={"is_active": is_active},
+    )
     return user  # type: ignore[return-value]
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: uuid.UUID,
+    payload: UserUpdate,
+    admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    """
+    Update a user's profile (username, role, active status).
+
+    Security-sensitive changes (is_admin, is_active) automatically
+    invalidate all of the user's existing JWT tokens.
+    """
+    user = await crud_user.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Prevent username collision
+    if payload.username and payload.username != user.username:
+        existing = await crud_user.get_user_by_username(db, payload.username)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Username '{payload.username}' is already taken",
+            )
+
+    user = await crud_user.update_user(
+        db, user,
+        username=payload.username,
+        is_admin=payload.is_admin,
+        is_active=payload.is_active,
+    )
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_UPDATE,
+        target_id=user.id,
+        target_name=user.username,
+        detail=payload.model_dump(exclude_none=True),
+    )
+    logger.info("Admin %s updated user %s", admin.username, user.username)
+    return user  # type: ignore[return-value]
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: uuid.UUID,
+    admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """
+    Soft-delete a user account.
+
+    Guards:
+    - Cannot delete your own account.
+    - Cannot delete a user who has active (non-deleted) budgets linked
+      through the audit trail. All budgets must be reassigned or deleted first.
+    """
+    user = await crud_user.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account",
+        )
+
+    # Guard: check for active budgets linked to this user via AuditLog
+    budget_count_result = await db.execute(
+        select(func.count())
+        .select_from(AuditLog)
+        .join(Budget, AuditLog.entity_id == Budget.id.cast(String))
+        .where(
+            AuditLog.user_id == user_id,
+            AuditLog.entity_type == "Budget",
+            Budget.is_deleted == False,  # noqa: E712
+        )
+    )
+    active_budget_count = budget_count_result.scalar_one()
+    if active_budget_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot delete user: {active_budget_count} active budget(s) are "
+                f"associated with this user. Delete or reassign them first."
+            ),
+        )
+
+    await crud_user.soft_delete_user(db, user)
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_DELETE,
+        target_id=user.id,
+        target_name=user.username,
+    )
+    logger.info("Admin %s soft-deleted user %s", admin.username, user.username)
+    return Response(status_code=204)
 
 
 # ===========================================================================
@@ -285,7 +412,41 @@ async def get_audit_logs(
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditLogOut]:
-    """Return audit logs, optionally filtered by entity type / ID and action/actor."""
+    """Return entity audit logs, optionally filtered by entity type / ID and action/actor."""
     return await crud_audit.get_audit_logs(
         db, entity_type=entity_type, entity_id=entity_id, filters=filters, limit=limit, offset=offset
     )  # type: ignore[return-value]
+
+
+# ===========================================================================
+# Admin Action Logs (read-only)
+# ===========================================================================
+
+
+@router.get("/action-logs", response_model=list[AdminActionLogOut])
+async def get_admin_action_logs(
+    actor_name: str | None = Query(default=None, description="Filter by admin username"),
+    action: str | None = Query(default=None, description="Filter by action type e.g. USER_PROVISION"),
+    target_name: str | None = Query(default=None, description="Filter by target username"),
+    limit: int = Query(default=50, le=500),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AdminActionLogOut]:
+    """
+    Return admin intent logs — who did what to whom as an administrator.
+
+    Unlike /audit-logs (raw ORM diffs), these are human-readable records of
+    deliberate admin decisions: provisioning, role changes, deletions, resets.
+    """
+    from sqlalchemy import desc
+    stmt = select(AdminActionLog).order_by(desc(AdminActionLog.timestamp))
+    if actor_name:
+        stmt = stmt.where(AdminActionLog.actor_name.ilike(f"%{actor_name}%"))
+    if action:
+        stmt = stmt.where(AdminActionLog.action == action)
+    if target_name:
+        stmt = stmt.where(AdminActionLog.target_name.ilike(f"%{target_name}%"))
+    stmt = stmt.limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()  # type: ignore[return-value]
