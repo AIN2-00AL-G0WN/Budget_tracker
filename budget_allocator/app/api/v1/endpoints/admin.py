@@ -36,7 +36,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_admin_user
 from app.core.database import get_db
-from app.core.security import create_token, hash_password
+from app.core.security import create_token, hash_password, verify_password, verify_totp_code
 from app.crud import crud_rate_card, crud_user, crud_audit
 from app.models.models import AuditLog, Budget, User
 from app.schemas.schemas import (
@@ -52,6 +52,7 @@ from app.schemas.schemas import (
     UserProvisionRequest,
     UserProvisionResponse,
     UserUpdate,
+    UserDeletionRequest,
 )
 from app.models.models import AdminActionLog, AdminActionType
 from app.services.admin_logger import log_admin_action
@@ -100,18 +101,13 @@ async def provision_user(
     new_user = await crud_user.create_user(
         db,
         username=payload.username,
-        hashed_password=hash_password(_PLACEHOLDER_PW),
-        is_admin=payload.is_admin,
+        hashed_password=hash_password(payload.temp_password),
+        is_admin=True,  # Enforced: all provisioned users default to Admin
         is_active=True,
         requires_password_change=True,
         token_version=0,
     )
 
-    setup_token = create_token(
-        user_id=new_user.id,
-        kind="setup",
-        token_version=new_user.token_version,
-    )
     await log_admin_action(
         db,
         actor=admin,
@@ -124,7 +120,7 @@ async def provision_user(
     return UserProvisionResponse(
         user_id=new_user.id,
         username=new_user.username,
-        setup_token=setup_token,
+        temp_password=payload.temp_password,
     )
 
 
@@ -159,6 +155,80 @@ async def reset_user_password(
     )
     logger.info("Admin %s reset password for user %s", admin.username, user.username)
     return ResetLinkResponse(setup_token=setup_token)
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user_profile(
+    user_id: uuid.UUID,
+    payload: UserUpdate,
+    admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    user = await crud_user.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # If the target is an admin, only the owner can update their own profile fields.
+    if user.is_admin and user.id != admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the account owner can update their own admin profile.",
+        )
+
+    user = await crud_user.update_user(
+        db,
+        user,
+        username=payload.username,
+        is_admin=payload.is_admin,
+        is_active=payload.is_active,
+    )
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_UPDATE,
+        target_id=user.id,
+        target_name=user.username,
+        detail={"updated_fields": payload.model_dump(exclude_unset=True)},
+    )
+    return user  # type: ignore[return-value]
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_account(
+    user_id: uuid.UUID,
+    payload: UserDeletionRequest,
+    admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    user = await crud_user.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Dual Confirmation / Verification
+    if payload.actor_username != admin.username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="actor_username does not match current admin")
+    
+    if payload.target_username != user.username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_username does not match the target user")
+
+    if not verify_password(payload.password, admin.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin password")
+
+    if not admin.totp_secret or not verify_totp_code(admin.totp_secret, payload.totp_code):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing TOTP code")
+
+    await crud_user.soft_delete_user(db, user)
+    await log_admin_action(
+        db,
+        actor=admin,
+        action=AdminActionType.USER_DEACTIVATE,
+        target_id=user.id,
+        target_name=user.username,
+        detail={"reason": "Dual-confirmed manual deletion"},
+    )
+    return Response(status_code=204)
+
+
 
 
 @router.get("/users", response_model=PaginatedResponse[UserOut])

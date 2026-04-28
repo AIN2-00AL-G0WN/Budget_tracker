@@ -221,24 +221,31 @@ class ChangePasswordResponse(BaseModel):
 class UserProvisionRequest(BaseModel):
     """Admin hits POST /users/provision with this payload."""
     username: str = Field(..., min_length=3, max_length=64)
-    is_admin: bool = True
+    temp_password: str = Field(..., min_length=8, description="Temporary password the admin sets and shares with the new user")
+    # is_admin always defaults to True — all provisioned users are admins.
 
 
 class UserUpdate(BaseModel):
     """Admin hits PATCH /admin/users/{id} with this payload."""
     username: Optional[str] = Field(None, min_length=3, max_length=64)
-    is_admin: Optional[bool] = None
-    is_active: Optional[bool] = None
+
+
+class UserDeletionRequest(BaseModel):
+    """Payload for deleting an account (requires credential re-verification)."""
+    actor_username: str = Field(..., description="Username/email of the admin performing the deletion")
+    target_username: str = Field(..., description="Username/email of the account to be deleted")
+    password: str
+    totp_code: str
 
 
 class UserProvisionResponse(BaseModel):
-    """Returned to the Admin — contains the single-use setup link token."""
+    """Returned to the Admin — shows created credentials to share with the new user."""
     user_id: uuid.UUID
     username: str
-    setup_token: str
+    temp_password: str
     message: str = (
-        "Share this token with the user over a secure channel. "
-        "It is single-use and expires per the configured TTL."
+        "Share these credentials with the user via a secure channel (email/Slack). "
+        "They must log in at /auth/login, then complete first-time setup (change password + scan TOTP QR)."
     )
 
 
