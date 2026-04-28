@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Budget, Family, Team, Run
 
 
-async def get_global_budget_summary(db: AsyncSession, business_unit: str | None = None) -> dict | None:
+import uuid
+
+async def get_global_budget_summary(db: AsyncSession, business_unit_id: uuid.UUID | None = None) -> dict | None:
     """
     Returns aggregated budget stats across all sub-divisions for all active
     projects, returning a dictionary representation of BudgetSummaryOut.
@@ -46,8 +48,8 @@ async def get_global_budget_summary(db: AsyncSession, business_unit: str | None 
          Budget.is_deleted == False,
      )
 
-    if business_unit:
-        stmt = stmt.where(Family.business_unit == business_unit)
+    if business_unit_id:
+        stmt = stmt.where(Family.business_unit_id == business_unit_id)
 
     result = await db.execute(stmt)
     row = result.one_or_none()

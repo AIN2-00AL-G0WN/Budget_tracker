@@ -11,9 +11,10 @@ Route summary
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,16 +31,16 @@ logger = logging.getLogger(__name__)
 
 @router.get("/global-summary", response_model=BudgetSummaryOut)
 async def get_global_summary(
-    business_unit: str | None = None,
+    business_unit_id: uuid.UUID | None = Query(None, description="Filter by business unit ID"),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BudgetSummaryOut:
     """
     Returns a unified global roll-up of all active budgets in the system.
     Excludes any budgets associated with soft-deleted projects, sub-divisions, runs, or budgets.
-    Optionally filter by business_unit.
+    Optionally filter by business_unit_id.
     """
-    summary_data = await crud_analytics.get_global_budget_summary(db, business_unit=business_unit)
+    summary_data = await crud_analytics.get_global_budget_summary(db, business_unit_id=business_unit_id)
     if not summary_data:
         return BudgetSummaryOut(
             tc_count=0,

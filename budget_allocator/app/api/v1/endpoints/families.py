@@ -30,14 +30,14 @@ logger = logging.getLogger(__name__)
 
 @router.get("", response_model=PaginatedResponse[FamilyOut])
 async def list_families(
-    business_unit: str | None = Query(None, description="Filter by business unit"),
+    business_unit_id: uuid.UUID | None = Query(None, description="Filter by business unit ID"),
     limit: int = Query(50, le=500),
     offset: int = Query(0, ge=0),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[FamilyOut]:
-    total = await crud_family.count_active_families(db, business_unit=business_unit)
-    items = await crud_family.get_all_families_paginated(db, business_unit=business_unit, limit=limit, offset=offset)
+    total = await crud_family.count_active_families(db, business_unit_id=business_unit_id)
+    items = await crud_family.get_all_families_paginated(db, business_unit_id=business_unit_id, limit=limit, offset=offset)
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
