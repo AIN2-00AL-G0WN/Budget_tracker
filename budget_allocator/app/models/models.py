@@ -207,6 +207,11 @@ class AuthLog(Base):
         SAEnum(AuthEventType, name="auth_event_type", create_type=True),
         nullable=False,
     )
+    username: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="Denormalized username for quick log readability",
+    )
     ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -245,12 +250,14 @@ class BusinessUnit(Base):
         server_default=func.now(),
         nullable=False,
     )
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Relationships
     families: Mapped[list["Family"]] = relationship(
@@ -301,12 +308,14 @@ class Family(Base):
         server_default=func.now(),
         nullable=False,
     )
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Relationships
     business_unit: Mapped["BusinessUnit"] = relationship(
@@ -359,6 +368,19 @@ class Team(Base):
         default=False,
         nullable=False,
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         Index(
@@ -422,11 +444,23 @@ class Run(Base):
         server_default=func.now(),
         nullable=False,
     )
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "uq_run_team_name",
+            "team_id",
+            "name",
+            unique=True,
+            postgresql_where=(is_deleted == False),  # noqa: E712
+        ),
     )
 
     # Relationships
@@ -564,12 +598,14 @@ class Budget(Base):
         server_default=func.now(),
         nullable=False,
     )
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Relationships
     run: Mapped["Run"] = relationship(

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 from app.models.models import Budget, Run, Team
 from app.api.dependencies.filters import BudgetFilterParams
+from app.core.context import current_username
 
 
 def _apply_budget_filters(stmt, filters: BudgetFilterParams):
@@ -171,6 +172,8 @@ async def create_budget(
     """
     budget = Budget(
         run_id=run_id,
+        created_by_name=current_username.get(),
+        updated_by_name=current_username.get(),
         **full_budget_data,
     )
     db.add(budget)
@@ -207,6 +210,7 @@ async def update_budget(
         
     for field, value in full_budget_data.items():
         setattr(budget, field, value)
+    budget.updated_by_name = current_username.get()
     db.add(budget)
     await db.flush()            # Trigger UPDATE so DB sets updated_at
     await db.refresh(budget)    # Fix #15: reload updated_at before returning
@@ -216,6 +220,7 @@ async def update_budget(
 async def delete_budget(db: AsyncSession, budget: Budget) -> None:
     """Soft-delete a Budget row by setting is_deleted=True."""
     budget.is_deleted = True
+    budget.updated_by_name = current_username.get()
     db.add(budget)
     await db.flush()
 

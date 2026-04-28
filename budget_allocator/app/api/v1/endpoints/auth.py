@@ -77,10 +77,11 @@ _DUMMY_HASH: str = hash_password("dummy-timing-prevention-string-xK9!")
 async def _log_auth_event(
     db: AsyncSession,
     user_id,
+    username: str | None,
     event_type: AuthEventType,
     ip: str | None,
 ) -> None:
-    db.add(AuthLog(user_id=user_id, event_type=event_type, ip_address=ip))
+    db.add(AuthLog(user_id=user_id, username=username, event_type=event_type, ip_address=ip))
     # Flush without committing — the caller's session.commit() will persist it
 
 
@@ -128,7 +129,7 @@ async def login(
 
     if not user or not password_ok:
         if user:
-            await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+            await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
             await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -165,7 +166,7 @@ async def login(
         )
 
     # Fallback if no MFA setup and somehow doesn't require password change (legacy or special accounts)
-    await _log_auth_event(db, user.id, AuthEventType.LOGIN_SUCCESS, ip)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_SUCCESS, ip)
 
     access_token = create_token(
         user_id=user.id,
@@ -230,7 +231,7 @@ async def login_mfa(
         )
 
     if not verify_totp_code(user.totp_secret, payload.totp_code):
-        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -239,7 +240,7 @@ async def login_mfa(
 
     # Reject replayed TOTP codes (same code used within 90s)
     if await crud_totp.is_code_consumed(db, user.id, payload.totp_code):
-        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -249,7 +250,7 @@ async def login_mfa(
     # Mark code as consumed so it cannot be replayed
     await crud_totp.consume_code(db, user.id, payload.totp_code)
 
-    await _log_auth_event(db, user.id, AuthEventType.LOGIN_SUCCESS, ip)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_SUCCESS, ip)
 
     access_token = create_token(
         user_id=user.id,
@@ -355,7 +356,7 @@ async def setup_account(
     user.token_version += 1   # Invalidates the setup token — can't reuse
 
     db.add(user)
-    await _log_auth_event(db, user.id, AuthEventType.MFA_ENABLED, None)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.MFA_ENABLED, None)
 
     totp_uri = get_totp_uri(user.totp_secret, user.username)
     await db.commit()
@@ -399,7 +400,7 @@ async def change_password(
 
     # 1. Verify current password
     if not verify_password(payload.current_password, user.hashed_password):
-        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -414,7 +415,7 @@ async def change_password(
                 detail="MFA is enabled for this account. TOTP code is required to change password.",
             )
         if not verify_totp_code(user.totp_secret, payload.totp_code):
-            await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+            await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
             await db.commit()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -422,7 +423,7 @@ async def change_password(
             )
         # Fix #3: Replay prevention
         if await crud_totp.is_code_consumed(db, user.id, payload.totp_code):
-            await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+            await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
             await db.commit()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -440,7 +441,7 @@ async def change_password(
     if not user.totp_secret:
         user.totp_secret = generate_totp_secret()
         totp_uri = get_totp_uri(user.totp_secret, user.username)
-        await _log_auth_event(db, user.id, AuthEventType.MFA_ENABLED, ip)
+        await _log_auth_event(db, user.id, user.username, AuthEventType.MFA_ENABLED, ip)
 
     # 4. Bump token_version — logs out everyone else
     user.token_version += 1
@@ -448,8 +449,8 @@ async def change_password(
     db.add(user)
 
     # 5. Audit trail
-    await _log_auth_event(db, user.id, AuthEventType.PASSWORD_CHANGED, ip)
-    await _log_auth_event(db, user.id, AuthEventType.TOKEN_INVALIDATED, None)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.PASSWORD_CHANGED, ip)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.TOKEN_INVALIDATED, None)
 
     await db.commit()
     logger.info("User %s successfully changed their password", user.username)
@@ -504,7 +505,7 @@ async def forgot_password_initiate(
 
     # Step 3a: validate the TOTP code
     if not verify_totp_code(user.totp_secret, payload.totp_code):
-        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -513,7 +514,7 @@ async def forgot_password_initiate(
 
     # Step 3b: reject replayed TOTP codes
     if await crud_totp.is_code_consumed(db, user.id, payload.totp_code):
-        await _log_auth_event(db, user.id, AuthEventType.LOGIN_FAILED, ip)
+        await _log_auth_event(db, user.id, user.username, AuthEventType.LOGIN_FAILED, ip)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -576,8 +577,8 @@ async def forgot_password_confirm(
     user.requires_password_change = False
     db.add(user)
 
-    await _log_auth_event(db, user.id, AuthEventType.PASSWORD_RESET, ip)
-    await _log_auth_event(db, user.id, AuthEventType.TOKEN_INVALIDATED, None)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.PASSWORD_RESET, ip)
+    await _log_auth_event(db, user.id, user.username, AuthEventType.TOKEN_INVALIDATED, None)
     await db.commit()
     
     logger.info("User %s successfully reset their password", user.username)

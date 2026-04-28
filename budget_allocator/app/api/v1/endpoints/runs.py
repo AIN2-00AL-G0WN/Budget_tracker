@@ -54,7 +54,14 @@ async def create_run(
     if not parent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-    run = await crud_run.create_run(db, team_id, payload)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        run = await crud_run.create_run(db, team_id, payload)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run name '{payload.name}' already exists in this team."
+        )
     return run
 
 
@@ -82,7 +89,14 @@ async def update_run(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     current_change_reason.set(payload.change_reason)
-    run = await crud_run.update_run(db, run, payload)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        run = await crud_run.update_run(db, run, payload)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run name '{payload.name}' already exists in this team."
+        )
     return run
 
 

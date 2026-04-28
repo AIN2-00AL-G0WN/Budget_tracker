@@ -42,6 +42,7 @@ from app.models.models import AuditLog, Budget, User
 from app.schemas.schemas import (
     AdminActionLogOut,
     AuditLogOut,
+    AuthLogOut,
     PaginatedResponse,
     RateCardCreate,
     RateCardOut,
@@ -447,6 +448,33 @@ async def get_admin_action_logs(
         stmt = stmt.where(AdminActionLog.action == action)
     if target_name:
         stmt = stmt.where(AdminActionLog.target_name.ilike(f"%{target_name}%"))
+    stmt = stmt.limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()  # type: ignore[return-value]
+
+
+# ===========================================================================
+# Auth Logs (read-only)
+# ===========================================================================
+
+from app.models.models import AuthLog
+
+@router.get("/auth-logs", response_model=list[AuthLogOut])
+async def get_auth_logs(
+    username: str | None = Query(default=None, description="Filter by username"),
+    event_type: str | None = Query(default=None, description="Filter by event type"),
+    limit: int = Query(default=50, le=500),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AuthLogOut]:
+    """Return authentication logs."""
+    from sqlalchemy import desc
+    stmt = select(AuthLog).order_by(desc(AuthLog.timestamp))
+    if username:
+        stmt = stmt.where(AuthLog.username.ilike(f"%{username}%"))
+    if event_type:
+        stmt = stmt.where(AuthLog.event_type == event_type)
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     return result.scalars().all()  # type: ignore[return-value]

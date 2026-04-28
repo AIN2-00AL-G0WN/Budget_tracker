@@ -286,7 +286,9 @@ class BusinessUnitOut(_Base):
     name: str
     is_deleted: bool
     created_at: datetime
+    created_by_name: Optional[str]
     updated_at: datetime
+    updated_by_name: Optional[str]
 
 
 # ===========================================================================
@@ -330,7 +332,9 @@ class FamilyOut(_Base):
     status: str
     is_deleted: bool
     created_at: datetime
+    created_by_name: Optional[str]
     updated_at: datetime
+    updated_by_name: Optional[str]
 
 
 # Backward-compat aliases
@@ -379,6 +383,10 @@ class TeamOut(_Base):
     end_date: Optional[date]
     status: str
     is_deleted: bool
+    created_at: datetime
+    created_by_name: Optional[str]
+    updated_at: datetime
+    updated_by_name: Optional[str]
 
 
 # ===========================================================================
@@ -400,7 +408,9 @@ class RunOut(_Base):
     name: str
     is_deleted: bool
     created_at: datetime
+    created_by_name: Optional[str]
     updated_at: datetime
+    updated_by_name: Optional[str]
 
 
 # Backward-compat aliases
@@ -551,7 +561,9 @@ class BudgetOut(_Base):
     is_deleted: bool
     is_locked: bool
     created_at: datetime
+    created_by_name: Optional[str]
     updated_at: datetime
+    updated_by_name: Optional[str]
 
 
 class BudgetVersionOut(BaseModel):
@@ -743,3 +755,18 @@ class AdminActionLogOut(_Base):
     target_name: Optional[str]
     detail: Optional[dict]
     timestamp: datetime
+
+
+# ===========================================================================
+# Auth Log schemas
+# ===========================================================================
+
+class AuthLogOut(_Base):
+    """Returned from GET /admin/auth-logs — one row per auth event."""
+    id: int
+    user_id: uuid.UUID
+    username: Optional[str]
+    event_type: str
+    ip_address: Optional[str]
+    timestamp: datetime
+

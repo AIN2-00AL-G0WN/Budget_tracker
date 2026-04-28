@@ -16,6 +16,7 @@ from sqlalchemy.orm import joinedload
 from app.models.models import Run
 from app.schemas.schemas import RunCreate, RunUpdate
 from app.api.dependencies.filters import BudgetFilterParams
+from app.core.context import current_username
 
 
 def _apply_budget_filters(stmt, filters: BudgetFilterParams):
@@ -111,6 +112,8 @@ async def create_run(
     """Persist a new Run."""
     data = payload.model_dump()
     data["team_id"] = team_id
+    data["created_by_name"] = current_username.get()
+    data["updated_by_name"] = current_username.get()
     run = Run(**data)
     db.add(run)
     await db.flush()
@@ -126,6 +129,7 @@ async def update_run(
     """Apply a partial update to an already-fetched Run ORM object."""
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(run, field, value)
+    run.updated_by_name = current_username.get()
     db.add(run)
     await db.flush()
     await db.refresh(run)
@@ -135,5 +139,6 @@ async def update_run(
 async def delete_run(db: AsyncSession, run: Run) -> None:
     """Soft-delete a Run."""
     run.is_deleted = True
+    run.updated_by_name = current_username.get()
     db.add(run)
     await db.flush()

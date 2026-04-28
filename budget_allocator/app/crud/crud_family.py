@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.models.models import Budget, Family, Team
 from app.schemas.schemas import FamilyCreate, FamilyUpdate, TeamCreate, TeamUpdate
 from app.api.dependencies.filters import WorkflowFilterParams
+from app.core.context import current_username
 
 
 # ===========================================================================
@@ -84,7 +85,10 @@ async def get_family_by_id(
 
 async def create_family(db: AsyncSession, payload: FamilyCreate) -> Family:
     """Persist a new Family row."""
-    family = Family(**payload.model_dump())
+    data = payload.model_dump()
+    data["created_by_name"] = current_username.get()
+    data["updated_by_name"] = current_username.get()
+    family = Family(**data)
     db.add(family)
     await db.flush()
     await db.refresh(family)
@@ -99,6 +103,7 @@ async def update_family(
     """Apply a partial update to an already-fetched Family ORM object."""
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(family, field, value)
+    family.updated_by_name = current_username.get()
     db.add(family)
     await db.flush()
     await db.refresh(family)
@@ -108,6 +113,7 @@ async def update_family(
 async def delete_family(db: AsyncSession, family: Family) -> None:
     """Soft-delete a Family."""
     family.is_deleted = True
+    family.updated_by_name = current_username.get()
     db.add(family)
     await db.flush()
 
@@ -214,6 +220,8 @@ async def create_team(
     """Persist a new Team. family_id comes from the URL path parameter."""
     data = payload.model_dump()
     data["family_id"] = family_id
+    data["created_by_name"] = current_username.get()
+    data["updated_by_name"] = current_username.get()
     team = Team(**data)
     db.add(team)
     await db.flush()
@@ -242,6 +250,7 @@ async def update_team(
                 run.budget.is_locked = True
                 db.add(run.budget)
 
+    team.updated_by_name = current_username.get()
     db.add(team)
     await db.flush()
     await db.refresh(team)
@@ -251,5 +260,6 @@ async def update_team(
 async def delete_team(db: AsyncSession, team: Team) -> None:
     """Soft-delete a Team."""
     team.is_deleted = True
+    team.updated_by_name = current_username.get()
     db.add(team)
     await db.flush()
