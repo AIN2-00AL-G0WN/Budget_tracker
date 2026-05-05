@@ -40,8 +40,8 @@ from app.core.security import (
     verify_password,
     verify_totp_code,
 )
-from app.crud import crud_totp, crud_user
-from app.models.models import AuthEventType, AuthLog, User
+from app.crud import crud_auth_log, crud_totp, crud_user
+from app.models.models import AuthEventType, User
 from app.schemas.schemas import (
     ChangePasswordRequest,
     ChangePasswordResponse,
@@ -81,8 +81,14 @@ async def _log_auth_event(
     event_type: AuthEventType,
     ip: str | None,
 ) -> None:
-    db.add(AuthLog(user_id=user_id, username=username, event_type=event_type, ip_address=ip))
-    # Flush without committing — the caller's session.commit() will persist it
+    """Delegate auth event recording to the repository layer."""
+    await crud_auth_log.log_auth_event(
+        db,
+        user_id=user_id,
+        username=username,
+        event_type=event_type,
+        ip_address=ip,
+    )
 
 
 def _get_ip(request: Request) -> str | None:
@@ -120,8 +126,8 @@ async def login(
     """
     ip = _get_ip(request)
 
-    result = await db.execute(select(User).where(User.username == payload.username))
-    user: User | None = result.scalar_one_or_none()
+    # Repository: look up user by username
+    user: User | None = await crud_user.get_user_by_username(db, payload.username)
 
     # Fix #5: Always call verify_password — prevents timing oracle.
     candidate_hash = user.hashed_password if user else _DUMMY_HASH
@@ -350,12 +356,14 @@ async def setup_account(
     3. Mark ``requires_password_change = False``.
     4. Increment ``token_version`` to invalidate the setup token immediately.
     """
-    user.hashed_password = hash_password(payload.new_password)
-    user.totp_secret = generate_totp_secret()
-    user.requires_password_change = False
-    user.token_version += 1   # Invalidates the setup token — can't reuse
-
-    db.add(user)
+    # Repository: finalise account provisioning (sets password, TOTP, bumps token_version)
+    totp_secret = generate_totp_secret()
+    user = await crud_user.complete_account_setup(
+        db,
+        user,
+        new_hashed_password=hash_password(payload.new_password),
+        totp_secret=totp_secret,
+    )
     await _log_auth_event(db, user.id, user.username, AuthEventType.MFA_ENABLED, None)
 
     totp_uri = get_totp_uri(user.totp_secret, user.username)
@@ -431,27 +439,25 @@ async def change_password(
             )
         await crud_totp.consume_code(db, user.id, payload.totp_code)
 
-    # 3. Update password
-    user.hashed_password = hash_password(payload.new_password)
-
-    # 3a. Auto-provision MFA if not yet configured
-    #     This ensures the user can later use the forgot-password flow (which
-    #     requires a valid TOTP secret as proof-of-identity).
-    totp_uri = None
+    # Repository: apply password change (handles token_version bump + optional TOTP provisioning)
+    new_totp_secret: str | None = None
+    totp_uri: str | None = None
     if not user.totp_secret:
-        user.totp_secret = generate_totp_secret()
-        totp_uri = get_totp_uri(user.totp_secret, user.username)
+        new_totp_secret = generate_totp_secret()
+        totp_uri = get_totp_uri(new_totp_secret, user.username)
+
+    user = await crud_user.change_password(
+        db,
+        user,
+        new_hashed_password=hash_password(payload.new_password),
+        new_totp_secret=new_totp_secret,
+    )
+
+    if new_totp_secret:
         await _log_auth_event(db, user.id, user.username, AuthEventType.MFA_ENABLED, ip)
 
-    # 4. Bump token_version — logs out everyone else
-    user.token_version += 1
-    user.requires_password_change = False
-    db.add(user)
-
-    # 5. Audit trail
     await _log_auth_event(db, user.id, user.username, AuthEventType.PASSWORD_CHANGED, ip)
     await _log_auth_event(db, user.id, user.username, AuthEventType.TOKEN_INVALIDATED, None)
-
     await db.commit()
     logger.info("User %s successfully changed their password", user.username)
 
@@ -486,8 +492,8 @@ async def forgot_password_initiate(
     await crud_totp.purge_expired_codes(db)
 
     # Step 2: look up user — always process to avoid timing-based enumeration
-    result = await db.execute(select(User).where(User.username == payload.username))
-    user: User | None = result.scalar_one_or_none()
+    # Repository: look up user by username
+    user: User | None = await crud_user.get_user_by_username(db, payload.username)
 
     if user is None or not user.is_active:
         logger.debug("[forgot-password] User not found or inactive for username: %r", payload.username)
@@ -569,18 +575,16 @@ async def forgot_password_confirm(
             detail="Reset session invalidated. Please request a new password reset.",
         )
 
-    # Set new password
-    user.hashed_password = hash_password(payload.new_password)
-
-    # Bump token_version — ALL existing JWTs (and this reset_token itself) are now invalid
-    user.token_version += 1
-    user.requires_password_change = False
-    db.add(user)
+    # Repository: apply the new password (handles token_version bump)
+    user = await crud_user.reset_password(
+        db,
+        user,
+        new_hashed_password=hash_password(payload.new_password),
+    )
 
     await _log_auth_event(db, user.id, user.username, AuthEventType.PASSWORD_RESET, ip)
     await _log_auth_event(db, user.id, user.username, AuthEventType.TOKEN_INVALIDATED, None)
     await db.commit()
-    
-    logger.info("User %s successfully reset their password", user.username)
 
+    logger.info("User %s successfully reset their password", user.username)
     return ForgotPasswordResponse()

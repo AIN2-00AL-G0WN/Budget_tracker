@@ -44,7 +44,11 @@ def _apply_budget_filters(stmt, filters: BudgetFilterParams):
             Budget.hrs_per_wk_per_hc_override,
             Budget.manual_hc_divisor_override,
             Budget.automation_hc_divisor_override,
-            Budget.hc_rate_card_override,
+            Budget.manual_hourly_rate_override,
+            Budget.automation_hourly_rate_override,
+            Budget.asqpm_hourly_rate_override,
+            Budget.lead_hourly_rate_override,
+            Budget.pm_hourly_rate_override,
             Budget.sqpm_boise_pct_override,
             Budget.pl_pct_override,
             Budget.per_wqe_pct_override,
@@ -258,3 +262,31 @@ async def get_budget_history(db: AsyncSession, budget_id: uuid.UUID) -> Sequence
             "snapshot": row.new_value,
         })
     return history
+
+
+async def count_active_budgets_for_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> int:
+    """
+    Return the count of non-deleted budgets associated with a given user
+    via the AuditLog trail.
+
+    Used by the admin delete-user guard to prevent deletion of users who
+    still have active budgets linked to them.
+    """
+    from app.models.models import AuditLog
+    from sqlalchemy import func, String
+
+    result = await db.execute(
+        select(func.count())
+        .select_from(AuditLog)
+        .join(Budget, AuditLog.entity_id == Budget.id.cast(String))
+        .where(
+            AuditLog.user_id == user_id,
+            AuditLog.entity_type == "Budget",
+            Budget.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one()
+

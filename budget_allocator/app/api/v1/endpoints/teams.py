@@ -93,8 +93,8 @@ async def delete_team(
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-    from app.crud import crud_test_run
-    active_runs = await crud_test_run.count_active_test_runs(db, sub_division_id=team_id)
+    from app.crud import crud_run
+    active_runs = await crud_run.count_active_runs(db, team_id=team_id)
     if active_runs > 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

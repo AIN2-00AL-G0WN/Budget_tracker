@@ -25,9 +25,9 @@ Row  | Label                      | Formula
   8  | Total TC                   | =SUM(C5:C7)
   9  | Duration in Days           | (manual input)
  10  | Duration Wks               | =C9/5   (working days / week)
- 11  | Manual HC                  | =SUM(C5,C7)/C10/3.5
- 12  | Automation HC              | =C6/5
- 13  | Manual HC Cost             | =C11*D13*C10      (HC * 40hr * ratecard)
+ 11  | Manual HC                  | =SUM(C5,C7)/C9/3.5
+ 12  | Automation HC              | =C6/C9/5
+ 13  | Manual HC Cost             | =C11*D13*C10
  14  | Automation HC Cost         | =C12*D14*C10
  15  | Lead Cost                  | =D15*C10
  16  | SQPM Cost of Boise 70%     | =D16*C10*0.7
@@ -193,16 +193,15 @@ def calculate_budget(
     # ------------------------------------------------------------------
     # Step 3: Headcount (HC)
     # ------------------------------------------------------------------
-    # Manual HC: =(manual_tc + adhoc) / duration_in_days / manual_hc_divisor
-    manual_hc: Decimal = (manual_tc + adhoc) / (dur * _rate("manual_hc_divisor", "manual_hc_divisor_override"))
+    # Manual HC: =SUM(C5,C7)/C9/3.5  →  (manual_tc + adhoc) / duration_in_days / manual_hc_divisor
+    manual_hc: Decimal = (manual_tc + adhoc) / dur / _rate("manual_hc_divisor", "manual_hc_divisor_override")
 
-    # Automation HC: =automation_tc / automation_hc_divisor
-    automation_hc: Decimal = automation_tc / _rate("automation_hc_divisor", "automation_hc_divisor_override")
+    # Automation HC: =C6/C9/5  →  automation_tc / duration_in_days / automation_hc_divisor
+    automation_hc: Decimal = automation_tc / dur / _rate("automation_hc_divisor", "automation_hc_divisor_override")
 
     # ------------------------------------------------------------------
-    # Step 4: Cost lines  (all: HC_count * hrs_per_week * rate * duration_wks)
+    # Step 4: Cost lines  (rate from D-column applied directly, NO separate hrs multiplier)
     # ------------------------------------------------------------------
-    hrs = _rate("hrs_per_wk_per_hc", "hrs_per_wk_per_hc_override")
     global_rate = _D(rates["hc_rate_card"])
 
     manual_rate = _rate("hc_rate_card", "manual_hourly_rate_override")
@@ -211,32 +210,32 @@ def calculate_budget(
     asqpm_rate = _rate("hc_rate_card", "asqpm_hourly_rate_override")
     pm_rate = _rate("hc_rate_card", "pm_hourly_rate_override")
 
-    # Row 13: Manual HC Cost  = manual_hc * 40hr * rate * duration_wks
-    manual_hc_cost: Decimal = manual_hc * hrs * manual_rate * duration_wks
+    # Row 13: Manual HC Cost   =C11*D13*C10
+    manual_hc_cost: Decimal = manual_hc * manual_rate * duration_wks
 
-    # Row 14: Automation HC Cost
-    automation_hc_cost: Decimal = automation_hc * hrs * automation_rate * duration_wks
+    # Row 14: Automation HC Cost  =C12*D14*C10
+    automation_hc_cost: Decimal = automation_hc * automation_rate * duration_wks
 
-    # Row 15: Lead Cost  = 1 lead * 40hr * rate * duration_wks
-    lead_cost: Decimal = _D(1) * hrs * lead_rate * duration_wks
+    # Row 15: Lead Cost  =D15*C10
+    lead_cost: Decimal = lead_rate * duration_wks
 
-    # Row 16: SQPM Cost of Boise 70%  = hc_rate * duration_wks * 0.7 * hrs
-    sqpm_cost_boise: Decimal = hrs * global_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
+    # Row 16: SQPM Cost of Boise 70%  =D16*C10*0.7
+    sqpm_cost_boise: Decimal = global_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
 
-    # Row 17: PL 50%
-    pl_cost: Decimal = hrs * global_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
+    # Row 17: PL 50%  =D17*C10*0.5
+    pl_cost: Decimal = global_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
 
-    # Row 18: Per WQE 40%  — note Excel uses factor of 6 WQE resources
-    per_wqe_cost: Decimal = _D(6) * hrs * global_rate * duration_wks * _rate("per_wqe_pct", "per_wqe_pct_override")
+    # Row 18: Per WQE 40%  =6*C10*D18*0.4
+    per_wqe_cost: Decimal = _D(6) * duration_wks * global_rate * _rate("per_wqe_pct", "per_wqe_pct_override")
 
-    # Row 19: aSQPM 80%
-    asqpm_cost: Decimal = hrs * asqpm_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
+    # Row 19: aSQPM 80%  =D19*C10*0.8
+    asqpm_cost: Decimal = asqpm_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
 
-    # Row 20: Lab Tech & Manager 40%  — note Excel uses factor of 2 resources
-    lab_tech_manager_cost: Decimal = _D(2) * hrs * global_rate * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
+    # Row 20: Lab Tech & Manager 40%  =D20*2*C10*0.4
+    lab_tech_manager_cost: Decimal = global_rate * _D(2) * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
 
-    # Row 21: Project Manager 40%
-    project_manager_cost: Decimal = hrs * pm_rate * duration_wks * _rate("project_manager_pct", "project_manager_pct_override")
+    # Row 21: Project Manager 40%  =C10*D21*0.4
+    project_manager_cost: Decimal = duration_wks * pm_rate * _rate("project_manager_pct", "project_manager_pct_override")
 
     # ------------------------------------------------------------------
     # Step 5: Summaries & Total Budget

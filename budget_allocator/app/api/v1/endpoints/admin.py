@@ -37,8 +37,8 @@ from sqlalchemy.exc import IntegrityError
 from app.api.dependencies.auth import get_current_admin_user
 from app.core.database import get_db
 from app.core.security import create_token, hash_password, verify_password, verify_totp_code
-from app.crud import crud_rate_card, crud_user, crud_audit
-from app.models.models import AuditLog, Budget, User
+from app.crud import crud_auth_log, crud_budget, crud_rate_card, crud_user, crud_audit
+from app.models.models import User
 from app.schemas.schemas import (
     AdminActionLogOut,
     AuditLogOut,
@@ -337,18 +337,8 @@ async def delete_user(
             detail="Cannot delete your own account",
         )
 
-    # Guard: check for active budgets linked to this user via AuditLog
-    budget_count_result = await db.execute(
-        select(func.count())
-        .select_from(AuditLog)
-        .join(Budget, AuditLog.entity_id == Budget.id.cast(String))
-        .where(
-            AuditLog.user_id == user_id,
-            AuditLog.entity_type == "Budget",
-            Budget.is_deleted == False,  # noqa: E712
-        )
-    )
-    active_budget_count = budget_count_result.scalar_one()
+    # Repository: guard against active budgets linked to this user
+    active_budget_count = await crud_budget.count_active_budgets_for_user(db, user_id)
     if active_budget_count > 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -510,17 +500,14 @@ async def get_admin_action_logs(
     Unlike /audit-logs (raw ORM diffs), these are human-readable records of
     deliberate admin decisions: provisioning, role changes, deletions, resets.
     """
-    from sqlalchemy import desc
-    stmt = select(AdminActionLog).order_by(desc(AdminActionLog.timestamp))
-    if actor_name:
-        stmt = stmt.where(AdminActionLog.actor_name.ilike(f"%{actor_name}%"))
-    if action:
-        stmt = stmt.where(AdminActionLog.action == action)
-    if target_name:
-        stmt = stmt.where(AdminActionLog.target_name.ilike(f"%{target_name}%"))
-    stmt = stmt.limit(limit).offset(offset)
-    result = await db.execute(stmt)
-    return result.scalars().all()  # type: ignore[return-value]
+    return await crud_auth_log.get_admin_action_logs(  # type: ignore[return-value]
+        db,
+        actor_name=actor_name,
+        action=action,
+        target_name=target_name,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ===========================================================================
@@ -539,12 +526,10 @@ async def get_auth_logs(
     db: AsyncSession = Depends(get_db),
 ) -> list[AuthLogOut]:
     """Return authentication logs."""
-    from sqlalchemy import desc
-    stmt = select(AuthLog).order_by(desc(AuthLog.timestamp))
-    if username:
-        stmt = stmt.where(AuthLog.username.ilike(f"%{username}%"))
-    if event_type:
-        stmt = stmt.where(AuthLog.event_type == event_type)
-    stmt = stmt.limit(limit).offset(offset)
-    result = await db.execute(stmt)
-    return result.scalars().all()  # type: ignore[return-value]
+    return await crud_auth_log.get_auth_logs(  # type: ignore[return-value]
+        db,
+        username=username,
+        event_type=event_type,
+        limit=limit,
+        offset=offset,
+    )

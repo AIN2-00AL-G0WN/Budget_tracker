@@ -23,9 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies.auth import get_current_user
 from app.core.context import current_change_reason
 from app.core.database import get_db
-from app.crud import crud_budget, crud_notification, crud_run, crud_holiday
-from app.models.models import User, Run, Team, Family, BusinessUnit
-from sqlalchemy import select
+from app.crud import crud_budget, crud_notification, crud_run
+from app.models.models import User
 from app.schemas.schemas import (
     BudgetCreate,
     BudgetUpdate,
@@ -38,7 +37,7 @@ from app.schemas.schemas import (
 )
 from app.api.dependencies.filters import BudgetFilterParams, get_budget_filters
 from app.services.calculation_service import compute_and_get_budget_fields
-from app.services import export_service
+from app.services import calendar_service, export_service
 
 router = APIRouter(tags=["budgets"])
 logger = logging.getLogger(__name__)
@@ -86,52 +85,21 @@ async def create_budget(
             ),
         )
 
-    # Check for intercepted dates and update TestRun
-    if payload.start_date or payload.end_date:
-        if payload.start_date:
-            tr.start_date = payload.start_date
-        if payload.end_date:
-            tr.end_date = payload.end_date
-        db.add(tr)
-        await db.flush()
-
-    # Template Inheritance (Cloning)
-    tc_count = payload.tc_count
-    
-    # Calculate expected duration using the new calendar logic
-    stmt = (
-        select(BusinessUnit.name)
-        .select_from(Run)
-        .join(Team, Run.team_id == Team.id)
-        .join(Family, Team.family_id == Family.id)
-        .join(BusinessUnit, Family.business_unit_id == BusinessUnit.id)
-        .where(Run.id == run_id)
-    )
-    bu_result = await db.execute(stmt)
-    business_unit = bu_result.scalar_one()
-
-    expected_duration = await crud_holiday.calculate_working_days(
-        db, payload.start_date, payload.end_date, business_unit
-    )
-
-    total_calendar_days = float((payload.end_date - payload.start_date).days + 1)
-
-    # Validate against frontend
-    duration = payload.duration_in_days
-    # Bounded Range Validation allows for scheduled weekend/holiday work!
-    if duration is not None:
-        if duration < expected_duration:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Duration ({duration}) cannot be less than the standard non-holiday working days ({expected_duration}).",
-            )
-        if duration > total_calendar_days:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Duration ({duration}) cannot exceed the total calendar days ({total_calendar_days}) in the given range.",
-            )
-    else:
-        duration = expected_duration
+    # ── Service: resolve & validate duration ─────────────────────────────────
+    try:
+        duration_result = await calendar_service.resolve_budget_duration(
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            requested_duration=payload.duration_in_days,
+            run_id=run_id,
+            db=db,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+    duration = duration_result.duration_in_days
 
     overrides = {
         k: v for k, v in payload.model_dump(exclude={"start_date", "end_date"}).items()
@@ -348,49 +316,23 @@ async def update_budget(
 
     current_change_reason.set(payload.change_reason)
 
-    tr = await crud_run.get_run_by_id(db, budget.run_id)
+    # ── Service: resolve & validate duration ─────────────────────────────────
     start_date = payload.start_date or tr.start_date
-    end_date = payload.end_date or tr.end_date
-    
-    if payload.start_date or payload.end_date:
-        if payload.start_date:
-            tr.start_date = payload.start_date
-        if payload.end_date:
-            tr.end_date = payload.end_date
-        db.add(tr)
-        await db.flush()
-
-    # Calculate expected duration using the new calendar logic
-    stmt = (
-        select(BusinessUnit.name)
-        .select_from(Run)
-        .join(Team, Run.team_id == Team.id)
-        .join(Family, Team.family_id == Family.id)
-        .join(BusinessUnit, Family.business_unit_id == BusinessUnit.id)
-        .where(Run.id == budget.run_id)
-    )
-    bu_result = await db.execute(stmt)
-    business_unit = bu_result.scalar_one()
-
-    expected_duration = await crud_holiday.calculate_working_days(
-        db, start_date, end_date, business_unit
-    )
-    total_calendar_days = float((end_date - start_date).days + 1)
-
-    duration = payload.duration_in_days
-    if duration is not None:
-        if duration < expected_duration:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Duration ({duration}) cannot be less than the standard non-holiday working days ({expected_duration}).",
-            )
-        if duration > total_calendar_days:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Duration ({duration}) cannot exceed the total calendar days ({total_calendar_days}) in the given range.",
-            )
-    else:
-        duration = expected_duration
+    end_date   = payload.end_date   or tr.end_date
+    try:
+        duration_result = await calendar_service.resolve_budget_duration(
+            start_date=start_date,
+            end_date=end_date,
+            requested_duration=payload.duration_in_days,
+            run_id=budget.run_id,
+            db=db,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+    duration = duration_result.duration_in_days
 
     # Extract per-budget overrides from the payload
     overrides = {

@@ -406,13 +406,25 @@ class RunCreate(BaseModel):
 
 class RunUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=256)
+    status: Optional[str] = None
     change_reason: str = Field(..., min_length=5, description="Mandatory reason for this change")
+
+    @field_validator("status")
+    @classmethod
+    def _valid_run_status(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        valid = {"ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED", "OVERDUE"}
+        if v not in valid:
+            raise ValueError(f"Invalid run status '{v}'. Must be one of: {sorted(valid)}")
+        return v
 
 
 class RunOut(_Base):
     id: uuid.UUID
     team_id: uuid.UUID
     name: str
+    status: str
     is_deleted: bool
     created_at: datetime
     created_by_name: Optional[str]

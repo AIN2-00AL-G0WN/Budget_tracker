@@ -36,6 +36,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -459,7 +460,7 @@ class Run(Base):
             "team_id",
             "name",
             unique=True,
-            postgresql_where=(is_deleted == False),  # noqa: E712
+            postgresql_where=text("is_deleted = false AND status = 'ACTIVE'"),
         ),
     )
 

@@ -37,14 +37,18 @@ async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
 
 
 async def get_all_users(db: AsyncSession) -> Sequence[User]:
-    """Return every user ordered by creation date (oldest first)."""
-    result = await db.execute(select(User).order_by(User.created_at))
+    """Return every active (non-deleted) user ordered by creation date (oldest first)."""
+    result = await db.execute(
+        select(User).where(User.is_active == True).order_by(User.created_at)  # noqa: E712
+    )
     return result.scalars().all()
 
 
 async def count_all_users(db: AsyncSession) -> int:
-    """Return the total count of all users."""
-    result = await db.execute(select(func.count()).select_from(User))
+    """Return the total count of active (non-deleted) users."""
+    result = await db.execute(
+        select(func.count()).select_from(User).where(User.is_active == True)  # noqa: E712
+    )
     return result.scalar_one()
 
 
@@ -54,9 +58,13 @@ async def get_all_users_paginated(
     limit: int = 50,
     offset: int = 0,
 ) -> Sequence[User]:
-    """Return a paginated slice of users ordered by creation date."""
+    """Return a paginated slice of active (non-deleted) users ordered by creation date."""
     result = await db.execute(
-        select(User).order_by(User.created_at).limit(limit).offset(offset)
+        select(User)
+        .where(User.is_active == True)  # noqa: E712
+        .order_by(User.created_at)
+        .limit(limit)
+        .offset(offset)
     )
     return result.scalars().all()
 
@@ -175,3 +183,73 @@ async def soft_delete_user(db: AsyncSession, user: User) -> None:
     user.totp_secret = None
     db.add(user)
     await db.flush()
+
+
+async def complete_account_setup(
+    db: AsyncSession,
+    user: User,
+    *,
+    new_hashed_password: str,
+    totp_secret: str,
+) -> User:
+    """
+    Finalise one-time account provisioning.
+
+    Sets the real password, stores the TOTP secret, clears the
+    ``requires_password_change`` flag, and bumps ``token_version``
+    to immediately invalidate the setup JWT.
+    """
+    user.hashed_password = new_hashed_password
+    user.totp_secret = totp_secret
+    user.requires_password_change = False
+    user.token_version += 1   # Invalidates the setup token — cannot be reused
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+async def change_password(
+    db: AsyncSession,
+    user: User,
+    *,
+    new_hashed_password: str,
+    new_totp_secret: str | None = None,
+) -> User:
+    """
+    Apply an authenticated password change for a logged-in user.
+
+    Optionally provisions a fresh TOTP secret when the user does not
+    yet have MFA configured.  Bumps ``token_version`` to invalidate
+    all other active sessions.
+    """
+    user.hashed_password = new_hashed_password
+    if new_totp_secret is not None:
+        user.totp_secret = new_totp_secret
+    user.token_version += 1
+    user.requires_password_change = False
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+async def reset_password(
+    db: AsyncSession,
+    user: User,
+    *,
+    new_hashed_password: str,
+) -> User:
+    """
+    Apply a self-service password reset (forgot-password confirm flow).
+
+    Bumps ``token_version`` to invalidate ALL existing JWTs for this user,
+    including the reset token itself, preventing token replay.
+    """
+    user.hashed_password = new_hashed_password
+    user.token_version += 1
+    user.requires_password_change = False
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
