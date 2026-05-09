@@ -528,7 +528,6 @@ class Budget(Base):
         UUID(as_uuid=True),
         ForeignKey("runs.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,      # Enforce one Budget per Run at DB level
         index=True,
     )
 
@@ -612,6 +611,17 @@ class Budget(Base):
     run: Mapped["Run"] = relationship(
         "Run",
         back_populates="budget"
+    )
+
+    __table_args__ = (
+        # Partial unique index: only one active (non-deleted) budget per run.
+        # A soft-deleted budget does NOT block creating a new one.
+        Index(
+            "uq_budget_run_id_active",
+            "run_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

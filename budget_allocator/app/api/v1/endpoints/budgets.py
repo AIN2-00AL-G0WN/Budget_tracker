@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.auth import get_current_admin_user, get_current_user
 from app.core.context import current_change_reason
 from app.core.database import get_db
 from app.crud import crud_budget, crud_notification, crud_run
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 async def create_budget(
     run_id: uuid.UUID = Query(..., description="Parent run ID"),
     payload: BudgetCreate = ...,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> BudgetOut:
     """
@@ -106,16 +106,18 @@ async def create_budget(
         if k.endswith("_override") and v is not None
     }
 
-    if tc_count is None or not overrides:
+    if payload.tc_count is None or not overrides:
         previous = await crud_budget.get_previous_budget_for_run(db, run_id)
         if previous:
-            if tc_count is None:
-                tc_count = previous.tc_count
+            if payload.tc_count is None:
+                payload.tc_count = previous.tc_count
             for k in [
                 "manual_tc_multiplier_override", "automation_tc_multiplier_override",
                 "adhoc_request_multiplier_override", "working_days_per_week_override",
                 "hrs_per_wk_per_hc_override", "manual_hc_divisor_override",
-                "automation_hc_divisor_override", "hc_rate_card_override",
+                "automation_hc_divisor_override",
+                "manual_hourly_rate_override", "automation_hourly_rate_override",
+                "asqpm_hourly_rate_override", "lead_hourly_rate_override", "pm_hourly_rate_override",
                 "sqpm_boise_pct_override", "pl_pct_override", "per_wqe_pct_override",
                 "asqpm_pct_override", "lab_tech_manager_pct_override", "project_manager_pct_override"
             ]:
@@ -124,7 +126,7 @@ async def create_budget(
                     if prev_val is not None:
                         overrides[k] = prev_val
 
-    if tc_count is None:
+    if payload.tc_count is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="tc_count is required for the first budget of a team."
@@ -134,7 +136,7 @@ async def create_budget(
     try:
         calculated = await compute_and_get_budget_fields(
             run_id=run_id,
-            tc_count=tc_count,
+            tc_count=payload.tc_count,
             duration_in_days=duration,
             db=db,
             overrides=overrides or None,
@@ -317,22 +319,43 @@ async def update_budget(
     current_change_reason.set(payload.change_reason)
 
     # ── Service: resolve & validate duration ─────────────────────────────────
-    start_date = payload.start_date or tr.start_date
-    end_date   = payload.end_date   or tr.end_date
-    try:
-        duration_result = await calendar_service.resolve_budget_duration(
-            start_date=start_date,
-            end_date=end_date,
-            requested_duration=payload.duration_in_days,
-            run_id=budget.run_id,
-            db=db,
-        )
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
-    duration = duration_result.duration_in_days
+    # Fetch the parent Run so we can fall back to its dates if the payload omits them.
+    run_obj = await crud_run.get_run_by_id(db, budget.run_id)
+    start_date = payload.start_date or (run_obj.start_date if run_obj else None)
+    end_date   = payload.end_date   or (run_obj.end_date   if run_obj else None)
+
+    if start_date is None or end_date is None:
+        # No dates available anywhere — skip date-based duration resolution
+        # and fall back to the existing stored duration_in_days on the budget.
+        if payload.duration_in_days is not None:
+            duration = payload.duration_in_days
+        elif budget.duration_in_days is not None:
+            duration = budget.duration_in_days
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Cannot determine duration: no start_date/end_date found on the "
+                    "payload or the Run, and no existing duration_in_days on the budget. "
+                    "Please provide start_date and end_date."
+                ),
+            )
+    else:
+        try:
+            duration_result = await calendar_service.resolve_budget_duration(
+                start_date=start_date,
+                end_date=end_date,
+                requested_duration=payload.duration_in_days,
+                run_id=budget.run_id,
+                db=db,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            )
+        duration = duration_result.duration_in_days
+
 
     # Extract per-budget overrides from the payload
     overrides = {

@@ -112,20 +112,21 @@ async def get_budget_for_run(
     run_id: uuid.UUID,
 ) -> Budget | None:
     """
-    Return the Budget associated with a given Run, or None.
+    Return the active (non-deleted) Budget associated with a given Run, or None.
     Used to enforce the one-budget-per-run rule before a POST.
 
-    NOTE: We intentionally do NOT filter by is_deleted here because the
-    database enforces an absolute unique index on run_id (not a partial
-    index). If a soft-deleted budget exists, we must detect it so the
-    endpoint can return a clear 409 instead of a raw IntegrityError.
+    We filter by is_deleted=False so that a soft-deleted budget does NOT block
+    creating a new one. The DB enforces this via a partial unique index
+    (uq_budget_run_id_active) that only covers non-deleted rows.
     """
     result = await db.execute(
         select(Budget).where(
             Budget.run_id == run_id,
+            Budget.is_deleted == False,  # noqa: E712
         )
     )
     return result.scalar_one_or_none()
+
 
 
 # Backward-compat alias
