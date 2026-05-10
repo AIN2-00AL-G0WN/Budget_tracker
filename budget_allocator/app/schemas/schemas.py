@@ -539,6 +539,36 @@ class BudgetUpdate(BaseModel):
         return self
 
 
+class BudgetTemplateOut(BaseModel):
+    """
+    Schema for the /budgets/template endpoint.
+    Contains the values to be pre-filled in the frontend form.
+    """
+    tc_count: Optional[float] = None
+    manual_tc_multiplier_override: Optional[float] = None
+    automation_tc_multiplier_override: Optional[float] = None
+    adhoc_request_multiplier_override: Optional[float] = None
+    working_days_per_week_override: Optional[float] = None
+    hrs_per_wk_per_hc_override: Optional[float] = None
+    manual_hc_divisor_override: Optional[float] = None
+    automation_hc_divisor_override: Optional[float] = None
+    manual_hourly_rate_override: Optional[float] = None
+    automation_hourly_rate_override: Optional[float] = None
+    asqpm_hourly_rate_override: Optional[float] = None
+    lead_hourly_rate_override: Optional[float] = None
+    pm_hourly_rate_override: Optional[float] = None
+    sqpm_boise_hourly_rate_override: Optional[float] = None
+    pl_hourly_rate_override: Optional[float] = None
+    per_wqe_hourly_rate_override: Optional[float] = None
+    lab_tech_manager_hourly_rate_override: Optional[float] = None
+    sqpm_boise_pct_override: Optional[float] = None
+    pl_pct_override: Optional[float] = None
+    per_wqe_pct_override: Optional[float] = None
+    asqpm_pct_override: Optional[float] = None
+    lab_tech_manager_pct_override: Optional[float] = None
+    project_manager_pct_override: Optional[float] = None
+
+
 class BudgetOut(_Base):
     id: uuid.UUID
     run_id: uuid.UUID

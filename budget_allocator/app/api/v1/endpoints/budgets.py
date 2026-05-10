@@ -31,12 +31,13 @@ from app.schemas.schemas import (
     BudgetOut,
     BudgetVersionOut,
     BudgetRestore,
+    BudgetTemplateOut,
     NotificationMarkRead,
     NotificationOut,
     PaginatedResponse,
 )
 from app.api.dependencies.filters import BudgetFilterParams, get_budget_filters
-from app.services.calculation_service import compute_and_get_budget_fields
+from app.services.calculation_service import compute_and_get_budget_fields, fetch_rate_cards
 from app.services import calendar_service, export_service
 
 router = APIRouter(tags=["budgets"])
@@ -236,6 +237,74 @@ async def restore_budget(
         payload.target_timestamp,
     )
     return restored_budget  # type: ignore[return-value]
+
+
+@router.get("/budgets/template", response_model=BudgetTemplateOut)
+async def get_budget_template(
+    run_id: uuid.UUID = Query(..., description="Run ID to get template for"),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BudgetTemplateOut:
+    """
+    Get a 'template' for creating a new budget.
+    If a previous budget exists for the team, it returns those values.
+    Otherwise, it returns the global default RateCard values.
+    """
+    previous = await crud_budget.get_previous_budget_for_run(db, run_id)
+    if previous:
+        return BudgetTemplateOut(
+            tc_count=previous.tc_count,
+            manual_tc_multiplier_override=previous.manual_tc_multiplier_override,
+            automation_tc_multiplier_override=previous.automation_tc_multiplier_override,
+            adhoc_request_multiplier_override=previous.adhoc_request_multiplier_override,
+            working_days_per_week_override=previous.working_days_per_week_override,
+            hrs_per_wk_per_hc_override=previous.hrs_per_wk_per_hc_override,
+            manual_hc_divisor_override=previous.manual_hc_divisor_override,
+            automation_hc_divisor_override=previous.automation_hc_divisor_override,
+            manual_hourly_rate_override=previous.manual_hourly_rate_override,
+            automation_hourly_rate_override=previous.automation_hourly_rate_override,
+            asqpm_hourly_rate_override=previous.asqpm_hourly_rate_override,
+            lead_hourly_rate_override=previous.lead_hourly_rate_override,
+            pm_hourly_rate_override=previous.pm_hourly_rate_override,
+            sqpm_boise_hourly_rate_override=previous.sqpm_boise_hourly_rate_override,
+            pl_hourly_rate_override=previous.pl_hourly_rate_override,
+            per_wqe_hourly_rate_override=previous.per_wqe_hourly_rate_override,
+            lab_tech_manager_hourly_rate_override=previous.lab_tech_manager_hourly_rate_override,
+            sqpm_boise_pct_override=previous.sqpm_boise_pct_override,
+            pl_pct_override=previous.pl_pct_override,
+            per_wqe_pct_override=previous.per_wqe_pct_override,
+            asqpm_pct_override=previous.asqpm_pct_override,
+            lab_tech_manager_pct_override=previous.lab_tech_manager_pct_override,
+            project_manager_pct_override=previous.project_manager_pct_override,
+        )
+
+    # Fallback to global rate card defaults
+    rates = await fetch_rate_cards(db)
+    return BudgetTemplateOut(
+        tc_count=None,
+        manual_tc_multiplier_override=rates.get("manual_tc_multiplier"),
+        automation_tc_multiplier_override=rates.get("automation_tc_multiplier"),
+        adhoc_request_multiplier_override=rates.get("adhoc_request_multiplier"),
+        working_days_per_week_override=rates.get("working_days_per_week"),
+        hrs_per_wk_per_hc_override=rates.get("hrs_per_wk_per_hc"),
+        manual_hc_divisor_override=rates.get("manual_hc_divisor"),
+        automation_hc_divisor_override=rates.get("automation_hc_divisor"),
+        manual_hourly_rate_override=rates.get("manual_hc_rate"),
+        automation_hourly_rate_override=rates.get("automation_hc_rate"),
+        asqpm_hourly_rate_override=rates.get("asqpm_rate"),
+        lead_hourly_rate_override=rates.get("lead_rate"),
+        pm_hourly_rate_override=rates.get("project_manager_rate"),
+        sqpm_boise_hourly_rate_override=rates.get("sqpm_boise_rate"),
+        pl_hourly_rate_override=rates.get("pl_rate"),
+        per_wqe_hourly_rate_override=rates.get("per_wqe_rate"),
+        lab_tech_manager_hourly_rate_override=rates.get("lab_tech_manager_rate"),
+        sqpm_boise_pct_override=rates.get("sqpm_boise_pct"),
+        pl_pct_override=rates.get("pl_pct"),
+        per_wqe_pct_override=rates.get("per_wqe_pct"),
+        asqpm_pct_override=rates.get("asqpm_pct"),
+        lab_tech_manager_pct_override=rates.get("lab_tech_manager_pct"),
+        project_manager_pct_override=rates.get("project_manager_pct"),
+    )
 
 
 @router.get("/budgets", response_model=PaginatedResponse[BudgetOut])

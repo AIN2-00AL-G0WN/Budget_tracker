@@ -24,7 +24,7 @@ async def get_family_lookups(
     db: AsyncSession = Depends(get_db),
 ) -> List[dict]:
     rows = await crud_lookups.get_family_lookups(db)
-    return [{"id": row.id, "name": row.name, "business_unit": row.business_unit} for row in rows]
+    return [{"id": row.id, "name": row.name, "business_unit": row.business_unit_name} for row in rows]
 
 @router.get("/teams", response_model=List[LookupItemOut[uuid.UUID]])
 async def get_team_lookups(

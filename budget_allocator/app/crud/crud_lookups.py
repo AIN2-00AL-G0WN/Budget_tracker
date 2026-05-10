@@ -13,11 +13,16 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Family, Team, User
+from app.models.models import Family, Team, User, BusinessUnit
 
 async def get_family_lookups(db: AsyncSession) -> Sequence[tuple[uuid.UUID, str, str]]:
     """Fetch lightweight ID, Name, and Business Unit for all active Families."""
-    stmt = select(Family.id, Family.name, Family.business_unit).where(Family.is_deleted == False).order_by(Family.name)
+    stmt = (
+        select(Family.id, Family.name, BusinessUnit.name.label("business_unit_name"))
+        .join(BusinessUnit, Family.business_unit_id == BusinessUnit.id)
+        .where(Family.is_deleted == False)
+        .order_by(Family.name)
+    )
     result = await db.execute(stmt)
     return result.all()
 
@@ -34,7 +39,13 @@ async def get_user_lookups(db: AsyncSession) -> Sequence[tuple[uuid.UUID, str]]:
     return result.all()
 
 async def get_distinct_business_units(db: AsyncSession) -> Sequence[str]:
-    """Fetch a unique list of all active business units."""
-    stmt = select(Family.business_unit).where(Family.is_deleted == False).distinct().order_by(Family.business_unit)
+    """Fetch a unique list of all business units currently in use by active families."""
+    stmt = (
+        select(BusinessUnit.name)
+        .join(Family, BusinessUnit.id == Family.business_unit_id)
+        .where(Family.is_deleted == False)
+        .distinct()
+        .order_by(BusinessUnit.name)
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
