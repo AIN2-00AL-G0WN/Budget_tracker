@@ -144,6 +144,9 @@ async def create_budget(
             db=db,
             overrides=overrides or None,
         )
+        # Explicitly add dates to the dictionary before saving to the Budget model
+        calculated["start_date"] = payload.start_date
+        calculated["end_date"] = payload.end_date
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -276,6 +279,8 @@ async def get_budget_template(
             asqpm_pct_override=previous.asqpm_pct_override,
             lab_tech_manager_pct_override=previous.lab_tech_manager_pct_override,
             project_manager_pct_override=previous.project_manager_pct_override,
+            start_date=previous.start_date,
+            end_date=previous.end_date,
         )
 
     # Fallback to global rate card defaults
@@ -392,8 +397,8 @@ async def update_budget(
     # ── Service: resolve & validate duration ─────────────────────────────────
     # Fetch the parent Run so we can fall back to its dates if the payload omits them.
     run_obj = await crud_run.get_run_by_id(db, budget.run_id)
-    start_date = payload.start_date or (run_obj.start_date if run_obj else None)
-    end_date   = payload.end_date   or (run_obj.end_date   if run_obj else None)
+    start_date = payload.start_date or budget.start_date or (run_obj.start_date if run_obj else None)
+    end_date   = payload.end_date   or budget.end_date   or (run_obj.end_date   if run_obj else None)
 
     if start_date is None or end_date is None:
         # No dates available anywhere — skip date-based duration resolution
@@ -441,6 +446,9 @@ async def update_budget(
             db=db,
             overrides=overrides or None,
         )
+        # Explicitly update dates in the dictionary for persistence
+        calculated["start_date"] = start_date
+        calculated["end_date"] = end_date
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

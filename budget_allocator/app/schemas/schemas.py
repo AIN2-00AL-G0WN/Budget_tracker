@@ -567,6 +567,8 @@ class BudgetTemplateOut(BaseModel):
     asqpm_pct_override: Optional[float] = None
     lab_tech_manager_pct_override: Optional[float] = None
     project_manager_pct_override: Optional[float] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
 
 
 class BudgetOut(_Base):
@@ -576,6 +578,8 @@ class BudgetOut(_Base):
     # Inputs
     tc_count: float
     duration_in_days: float
+    start_date: date
+    end_date: date
 
     # Calculated
     manual_tc_count: Optional[float]
@@ -636,6 +640,8 @@ class BudgetVersionOut(BaseModel):
     edit_timestamp: datetime
     user_id: Optional[str]
     change_reason: Optional[str]
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     snapshot: dict
 
     model_config = ConfigDict(from_attributes=True)

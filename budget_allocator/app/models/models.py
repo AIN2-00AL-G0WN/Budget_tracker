@@ -542,6 +542,8 @@ class Budget(Base):
     # ---- Manual Inputs (provided by the manager) ----------------------------
     tc_count: Mapped[float] = mapped_column(Float, nullable=False)
     duration_in_days: Mapped[float] = mapped_column(Float, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
     # ---- Calculated Fields (written exclusively by CalculationService) ------
     manual_tc_count: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

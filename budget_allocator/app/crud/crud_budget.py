@@ -260,6 +260,8 @@ async def get_budget_history(db: AsyncSession, budget_id: uuid.UUID) -> Sequence
             "edit_timestamp": row.timestamp,
             "user_id": str(row.user_id) if row.user_id else None,
             "change_reason": row.change_reason,
+            "start_date": row.new_value.get("start_date"),
+            "end_date": row.new_value.get("end_date"),
             "snapshot": row.new_value,
         })
     return history
