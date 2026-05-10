@@ -65,7 +65,15 @@ REQUIRED_RATE_KEYS: list[str] = [
     "hrs_per_wk_per_hc",          # 40.0
     "manual_hc_divisor",          # 3.5  ← divisor
     "automation_hc_divisor",      # 5.0  ← divisor
-    "hc_rate_card",               # 2.00  ($/hr equivalent)
+    "manual_hc_rate",             # replaces hc_rate_card for Manual
+    "automation_hc_rate",         # replaces hc_rate_card for Automation
+    "lead_rate",                  # replaces hc_rate_card for Lead
+    "sqpm_boise_rate",            # replaces hc_rate_card for SQPM Boise
+    "pl_rate",                    # replaces hc_rate_card for PL
+    "per_wqe_rate",               # replaces hc_rate_card for WQE
+    "asqpm_rate",                 # replaces hc_rate_card for aSQPM
+    "lab_tech_manager_rate",      # replaces hc_rate_card for Lab Tech/Mgr
+    "project_manager_rate",       # replaces hc_rate_card for PM
     "sqpm_boise_pct",             # 0.7
     "pl_pct",                     # 0.5
     "per_wqe_pct",                # 0.4   (note: uses factor of 6 in formula)
@@ -188,7 +196,7 @@ def calculate_budget(
     # ------------------------------------------------------------------
     # Step 2: Duration
     # ------------------------------------------------------------------
-    duration_wks: Decimal = dur / _rate("working_days_per_week", "working_days_per_week_override")
+    duration_wks: Decimal = dur * _rate("working_days_per_week", "working_days_per_week_override")
 
     # ------------------------------------------------------------------
     # Step 3: Headcount (HC)
@@ -202,13 +210,15 @@ def calculate_budget(
     # ------------------------------------------------------------------
     # Step 4: Cost lines  (rate from D-column applied directly, NO separate hrs multiplier)
     # ------------------------------------------------------------------
-    global_rate = _D(rates["hc_rate_card"])
-
-    manual_rate = _rate("hc_rate_card", "manual_hourly_rate_override")
-    automation_rate = _rate("hc_rate_card", "automation_hourly_rate_override")
-    lead_rate = _rate("hc_rate_card", "lead_hourly_rate_override")
-    asqpm_rate = _rate("hc_rate_card", "asqpm_hourly_rate_override")
-    pm_rate = _rate("hc_rate_card", "pm_hourly_rate_override")
+    manual_rate = _rate("manual_hc_rate", "manual_hourly_rate_override")
+    automation_rate = _rate("automation_hc_rate", "automation_hourly_rate_override")
+    lead_rate = _rate("lead_rate", "lead_hourly_rate_override")
+    sqpm_boise_hr_rate = _rate("sqpm_boise_rate", "sqpm_boise_hourly_rate_override")
+    pl_hr_rate = _rate("pl_rate", "pl_hourly_rate_override")
+    per_wqe_hr_rate = _rate("per_wqe_rate", "per_wqe_hourly_rate_override")
+    asqpm_hr_rate = _rate("asqpm_rate", "asqpm_hourly_rate_override")
+    lab_tech_hr_rate = _rate("lab_tech_manager_rate", "lab_tech_manager_hourly_rate_override")
+    pm_rate = _rate("project_manager_rate", "pm_hourly_rate_override")
 
     # Row 13: Manual HC Cost   =C11*D13*C10
     manual_hc_cost: Decimal = manual_hc * manual_rate * duration_wks
@@ -220,19 +230,19 @@ def calculate_budget(
     lead_cost: Decimal = lead_rate * duration_wks
 
     # Row 16: SQPM Cost of Boise 70%  =D16*C10*0.7
-    sqpm_cost_boise: Decimal = global_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
+    sqpm_cost_boise: Decimal = sqpm_boise_hr_rate * duration_wks * _rate("sqpm_boise_pct", "sqpm_boise_pct_override")
 
     # Row 17: PL 50%  =D17*C10*0.5
-    pl_cost: Decimal = global_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
+    pl_cost: Decimal = pl_hr_rate * duration_wks * _rate("pl_pct", "pl_pct_override")
 
     # Row 18: Per WQE 40%  =6*C10*D18*0.4
-    per_wqe_cost: Decimal = _D(6) * duration_wks * global_rate * _rate("per_wqe_pct", "per_wqe_pct_override")
+    per_wqe_cost: Decimal = _D(6) * duration_wks * per_wqe_hr_rate * _rate("per_wqe_pct", "per_wqe_pct_override")
 
     # Row 19: aSQPM 80%  =D19*C10*0.8
-    asqpm_cost: Decimal = asqpm_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
+    asqpm_cost: Decimal = asqpm_hr_rate * duration_wks * _rate("asqpm_pct", "asqpm_pct_override")
 
     # Row 20: Lab Tech & Manager 40%  =D20*2*C10*0.4
-    lab_tech_manager_cost: Decimal = global_rate * _D(2) * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
+    lab_tech_manager_cost: Decimal = lab_tech_hr_rate * _D(2) * duration_wks * _rate("lab_tech_manager_pct", "lab_tech_manager_pct_override")
 
     # Row 21: Project Manager 40%  =C10*D21*0.4
     project_manager_cost: Decimal = duration_wks * pm_rate * _rate("project_manager_pct", "project_manager_pct_override")

@@ -164,6 +164,12 @@ async def update_user_profile(
     admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserOut:
+    """
+    Update a user's profile (username, role, active status).
+
+    Security-sensitive changes (is_admin, is_active) automatically
+    invalidate all of the user's existing JWT tokens.
+    """
     user = await crud_user.get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -174,6 +180,15 @@ async def update_user_profile(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the account owner can update their own admin profile.",
         )
+
+    # Prevent username collision
+    if payload.username and payload.username != user.username:
+        existing = await crud_user.get_user_by_username(db, payload.username)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Username '{payload.username}' is already taken",
+            )
 
     user = await crud_user.update_user(
         db,
@@ -190,6 +205,7 @@ async def update_user_profile(
         target_name=user.username,
         detail={"updated_fields": payload.model_dump(exclude_unset=True)},
     )
+    logger.info("Admin %s updated user %s", admin.username, user.username)
     return user  # type: ignore[return-value]
 
 
@@ -200,9 +216,34 @@ async def delete_user_account(
     admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
+    """
+    Soft-delete a user account.
+    
+    Guards:
+    - Cannot delete your own account.
+    - Cannot delete a user who has active budgets.
+    - Requires dual-confirmation (admin password and TOTP).
+    """
     user = await crud_user.get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
+    if user.id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account",
+        )
+
+    # Repository: guard against active budgets linked to this user
+    active_budget_count = await crud_budget.count_active_budgets_for_user(db, user_id)
+    if active_budget_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot delete user: {active_budget_count} active budget(s) are "
+                f"associated with this user. Delete or reassign them first."
+            ),
+        )
 
     # Dual Confirmation / Verification
     if payload.actor_username != admin.username:
@@ -221,11 +262,12 @@ async def delete_user_account(
     await log_admin_action(
         db,
         actor=admin,
-        action=AdminActionType.USER_DEACTIVATE,
+        action=AdminActionType.USER_DELETE,
         target_id=user.id,
         target_name=user.username,
         detail={"reason": "Dual-confirmed manual deletion"},
     )
+    logger.info("Admin %s soft-deleted user %s", admin.username, user.username)
     return Response(status_code=204)
 
 
@@ -270,94 +312,7 @@ async def toggle_user_active(
     return user  # type: ignore[return-value]
 
 
-@router.patch("/users/{user_id}", response_model=UserOut)
-async def update_user(
-    user_id: uuid.UUID,
-    payload: UserUpdate,
-    admin: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db),
-) -> UserOut:
-    """
-    Update a user's profile (username, role, active status).
 
-    Security-sensitive changes (is_admin, is_active) automatically
-    invalidate all of the user's existing JWT tokens.
-    """
-    user = await crud_user.get_user_by_id(db, user_id)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    # Prevent username collision
-    if payload.username and payload.username != user.username:
-        existing = await crud_user.get_user_by_username(db, payload.username)
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Username '{payload.username}' is already taken",
-            )
-
-    user = await crud_user.update_user(
-        db, user,
-        username=payload.username,
-        is_admin=payload.is_admin,
-        is_active=payload.is_active,
-    )
-    await log_admin_action(
-        db,
-        actor=admin,
-        action=AdminActionType.USER_UPDATE,
-        target_id=user.id,
-        target_name=user.username,
-        detail=payload.model_dump(exclude_none=True),
-    )
-    logger.info("Admin %s updated user %s", admin.username, user.username)
-    return user  # type: ignore[return-value]
-
-
-@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(
-    user_id: uuid.UUID,
-    admin: User = Depends(get_current_admin_user),
-    db: AsyncSession = Depends(get_db),
-) -> Response:
-    """
-    Soft-delete a user account.
-
-    Guards:
-    - Cannot delete your own account.
-    - Cannot delete a user who has active (non-deleted) budgets linked
-      through the audit trail. All budgets must be reassigned or deleted first.
-    """
-    user = await crud_user.get_user_by_id(db, user_id)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if user.id == admin.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete your own account",
-        )
-
-    # Repository: guard against active budgets linked to this user
-    active_budget_count = await crud_budget.count_active_budgets_for_user(db, user_id)
-    if active_budget_count > 0:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Cannot delete user: {active_budget_count} active budget(s) are "
-                f"associated with this user. Delete or reassign them first."
-            ),
-        )
-
-    await crud_user.soft_delete_user(db, user)
-    await log_admin_action(
-        db,
-        actor=admin,
-        action=AdminActionType.USER_DELETE,
-        target_id=user.id,
-        target_name=user.username,
-    )
-    logger.info("Admin %s soft-deleted user %s", admin.username, user.username)
-    return Response(status_code=204)
 
 
 # ===========================================================================

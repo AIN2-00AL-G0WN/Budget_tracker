@@ -118,6 +118,8 @@ async def create_budget(
                 "automation_hc_divisor_override",
                 "manual_hourly_rate_override", "automation_hourly_rate_override",
                 "asqpm_hourly_rate_override", "lead_hourly_rate_override", "pm_hourly_rate_override",
+                "sqpm_boise_hourly_rate_override", "pl_hourly_rate_override",
+                "per_wqe_hourly_rate_override", "lab_tech_manager_hourly_rate_override",
                 "sqpm_boise_pct_override", "pl_pct_override", "per_wqe_pct_override",
                 "asqpm_pct_override", "lab_tech_manager_pct_override", "project_manager_pct_override"
             ]:

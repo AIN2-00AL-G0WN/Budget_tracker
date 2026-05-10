@@ -14,7 +14,16 @@ from fastapi import APIRouter, Depends
 
 from app.api.dependencies.auth import get_current_user
 from app.models.models import User
-from app.models.models import AuditAction, ProjectStatus, SubDivisionStatus
+from app.models.models import (
+    AuditAction,
+    ProjectStatus,
+    SubDivisionStatus,
+    FamilyStatus,
+    TeamStatus,
+    RunStatus,
+    AdminActionType,
+    AuthEventType,
+)
 
 router = APIRouter(prefix="/meta", tags=["meta"])
 
@@ -30,7 +39,15 @@ async def get_enums(
     states without hard-coding them client-side.
     """
     return {
+        # Legacy aliases (keeping for backwards compatibility if needed)
         "project_statuses": [s.value for s in ProjectStatus],
         "subdivision_statuses": [s.value for s in SubDivisionStatus],
+        
+        # Current proper naming
+        "family_statuses": [s.value for s in FamilyStatus],
+        "team_statuses": [s.value for s in TeamStatus],
+        "run_statuses": [s.value for s in RunStatus],
         "audit_actions": [a.value for a in AuditAction],
+        "admin_action_types": [a.value for a in AdminActionType],
+        "auth_event_types": [a.value for a in AuthEventType],
     }

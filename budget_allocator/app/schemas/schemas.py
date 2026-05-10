@@ -24,6 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # Shared config
 # ===========================================================================
 
+from app.models.models import FamilyStatus, TeamStatus, RunStatus
+
+
 class _Base(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -310,7 +313,7 @@ class FamilyCreate(BaseModel):
     @field_validator("status")
     @classmethod
     def _valid_family_status(cls, v: str) -> str:
-        valid = {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
+        valid = {s.value for s in FamilyStatus}
         if v not in valid:
             raise ValueError(f"Invalid family status '{v}'. Must be one of: {sorted(valid)}")
         return v
@@ -326,7 +329,7 @@ class FamilyUpdate(BaseModel):
     def _valid_family_status(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        valid = {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
+        valid = {s.value for s in FamilyStatus}
         if v not in valid:
             raise ValueError(f"Invalid family status '{v}'. Must be one of: {sorted(valid)}")
         return v
@@ -373,7 +376,7 @@ class TeamUpdate(BaseModel):
     def _valid_team_status(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        valid = {"PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"}
+        valid = {s.value for s in TeamStatus}
         if v not in valid:
             raise ValueError(
                 f"Invalid team status '{v}'. "
@@ -414,7 +417,7 @@ class RunUpdate(BaseModel):
     def _valid_run_status(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        valid = {"ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED", "OVERDUE"}
+        valid = {s.value for s in RunStatus}
         if v not in valid:
             raise ValueError(f"Invalid run status '{v}'. Must be one of: {sorted(valid)}")
         return v
@@ -469,6 +472,10 @@ class BudgetCreate(BaseModel):
     asqpm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     lead_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     pm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    sqpm_boise_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    pl_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    per_wqe_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    lab_tech_manager_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     sqpm_boise_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     pl_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     per_wqe_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
@@ -511,6 +518,10 @@ class BudgetUpdate(BaseModel):
     asqpm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     lead_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     pm_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    sqpm_boise_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    pl_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    per_wqe_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
+    lab_tech_manager_hourly_rate_override: Optional[float] = Field(default=None, gt=0)
     sqpm_boise_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     pl_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
     per_wqe_pct_override: Optional[float] = Field(default=None, ge=0, le=1.0)
@@ -570,6 +581,10 @@ class BudgetOut(_Base):
     asqpm_hourly_rate_override: Optional[float]
     lead_hourly_rate_override: Optional[float]
     pm_hourly_rate_override: Optional[float]
+    sqpm_boise_hourly_rate_override: Optional[float]
+    pl_hourly_rate_override: Optional[float]
+    per_wqe_hourly_rate_override: Optional[float]
+    lab_tech_manager_hourly_rate_override: Optional[float]
     sqpm_boise_pct_override: Optional[float]
     pl_pct_override: Optional[float]
     per_wqe_pct_override: Optional[float]

@@ -77,6 +77,14 @@ class TeamStatus(str, enum.Enum):
 SubDivisionStatus = TeamStatus
 
 
+class RunStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    OVERDUE = "OVERDUE"
+
+
 class AuditAction(str, enum.Enum):
     CREATE = "CREATE"
     UPDATE = "UPDATE"
@@ -574,6 +582,10 @@ class Budget(Base):
     asqpm_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lead_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pm_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sqpm_boise_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pl_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    per_wqe_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lab_tech_manager_hourly_rate_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     sqpm_boise_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pl_pct_override: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
