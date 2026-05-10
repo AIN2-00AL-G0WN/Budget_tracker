@@ -246,17 +246,33 @@ async def delete_user_account(
         )
 
     # Dual Confirmation / Verification
-    if payload.actor_username != admin.username:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="actor_username does not match current admin")
+    logger.debug("Verifying deletion request for user %s by admin %s", user.username, admin.username)
     
-    if payload.target_username != user.username:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_username does not match the target user")
+    if payload.actor_username.lower() != admin.username.lower():
+        logger.warning("Deletion guard: actor_username mismatch. Provided: %s, Current: %s", payload.actor_username, admin.username)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"Actor username mismatch: provided '{payload.actor_username}' but current admin is '{admin.username}'"
+        )
+    
+    if payload.target_username.lower() != user.username.lower():
+        logger.warning("Deletion guard: target_username mismatch. Provided: %s, Target: %s", payload.target_username, user.username)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"Target username mismatch: provided '{payload.target_username}' but target account is '{user.username}'"
+        )
 
     if not verify_password(payload.password, admin.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin password")
+        logger.warning("Deletion guard: invalid admin password for %s", admin.username)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid administrator password")
 
-    if not admin.totp_secret or not verify_totp_code(admin.totp_secret, payload.totp_code):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing TOTP code")
+    if not admin.totp_secret:
+        logger.error("Deletion guard: Admin %s has no TOTP secret configured", admin.username)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin MFA not configured. Cannot perform high-risk deletion.")
+
+    if not verify_totp_code(admin.totp_secret, payload.totp_code):
+        logger.warning("Deletion guard: invalid TOTP code from admin %s", admin.username)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA/TOTP code")
 
     await crud_user.soft_delete_user(db, user)
     await log_admin_action(
