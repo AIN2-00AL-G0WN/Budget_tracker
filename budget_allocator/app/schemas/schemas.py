@@ -578,8 +578,8 @@ class BudgetOut(_Base):
     # Inputs
     tc_count: float
     duration_in_days: float
-    start_date: date
-    end_date: date
+    start_date: Optional[date]
+    end_date: Optional[date]
 
     # Calculated
     manual_tc_count: Optional[float]
