@@ -19,53 +19,29 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# ── Reusable enum type references (create_type=True on first use only) ────────
+auth_event_type   = sa.Enum(
+    "LOGIN_SUCCESS", "LOGIN_FAILED", "PASSWORD_CHANGED",
+    "PASSWORD_RESET", "MFA_ENABLED", "TOKEN_INVALIDATED",
+    name="auth_event_type",
+)
+family_status     = sa.Enum("ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED", name="family_status")
+team_status       = sa.Enum("PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED", name="team_status")
+audit_action      = sa.Enum("CREATE", "UPDATE", "DELETE", name="audit_action")
+admin_action_type = sa.Enum(
+    "USER_PROVISION", "USER_UPDATE", "USER_DELETE",
+    "USER_ACTIVATE", "USER_DEACTIVATE", "USER_PASSWORD_RESET",
+    name="admin_action_type",
+)
+
 
 def upgrade() -> None:
-    # ── Enums ─────────────────────────────────────────────────────────────────
-    op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE auth_event_type AS ENUM (
-                'LOGIN_SUCCESS', 'LOGIN_FAILED', 'PASSWORD_CHANGED',
-                'PASSWORD_RESET', 'MFA_ENABLED', 'TOKEN_INVALIDATED'
-            );
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$;
-    """)
-
-    op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE family_status AS ENUM (
-                'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'
-            );
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$;
-    """)
-
-    op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE team_status AS ENUM (
-                'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'
-            );
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$;
-    """)
-
-    op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE audit_action AS ENUM ('CREATE', 'UPDATE', 'DELETE');
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$;
-    """)
-
-    op.execute("""
-        DO $$ BEGIN
-            CREATE TYPE admin_action_type AS ENUM (
-                'USER_PROVISION', 'USER_UPDATE', 'USER_DELETE',
-                'USER_ACTIVATE', 'USER_DEACTIVATE', 'USER_PASSWORD_RESET'
-            );
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$;
-    """)
+    conn = op.get_bind()
+    auth_event_type.create(conn, checkfirst=True)
+    family_status.create(conn, checkfirst=True)
+    team_status.create(conn, checkfirst=True)
+    audit_action.create(conn, checkfirst=True)
+    admin_action_type.create(conn, checkfirst=True)
 
     # ── users ──────────────────────────────────────────────────────────────────
     op.create_table(
@@ -89,9 +65,11 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("user_id", postgresql.UUID(as_uuid=True),
                   sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("event_type", sa.Enum("LOGIN_SUCCESS", "LOGIN_FAILED", "PASSWORD_CHANGED",
-                                        "PASSWORD_RESET", "MFA_ENABLED", "TOKEN_INVALIDATED",
-                                        name="auth_event_type", create_type=False), nullable=False),
+        sa.Column("event_type",
+                  sa.Enum("LOGIN_SUCCESS", "LOGIN_FAILED", "PASSWORD_CHANGED",
+                          "PASSWORD_RESET", "MFA_ENABLED", "TOKEN_INVALIDATED",
+                          name="auth_event_type", create_type=False),
+                  nullable=False),
         sa.Column("username", sa.String(64), nullable=True),
         sa.Column("ip_address", sa.String(45), nullable=True),
         sa.Column("timestamp", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
@@ -119,8 +97,9 @@ def upgrade() -> None:
         sa.Column("name", sa.String(256), nullable=False),
         sa.Column("business_unit_id", postgresql.UUID(as_uuid=True),
                   sa.ForeignKey("business_units.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("status", sa.Enum("ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED",
-                                    name="family_status", create_type=False),
+        sa.Column("status",
+                  sa.Enum("ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED",
+                          name="family_status", create_type=False),
                   nullable=False, server_default="ACTIVE"),
         sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
@@ -141,8 +120,9 @@ def upgrade() -> None:
         sa.Column("name", sa.String(256), nullable=False),
         sa.Column("start_date", sa.Date(), nullable=True),
         sa.Column("end_date", sa.Date(), nullable=True),
-        sa.Column("status", sa.Enum("PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED",
-                                    name="team_status", create_type=False),
+        sa.Column("status",
+                  sa.Enum("PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED",
+                          name="team_status", create_type=False),
                   nullable=False, server_default="PLANNED"),
         sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
@@ -284,8 +264,10 @@ def upgrade() -> None:
         sa.Column("entity_type", sa.String(64), nullable=False),
         sa.Column("change_reason", sa.String(), nullable=True),
         sa.Column("entity_id", sa.String(64), nullable=False),
-        sa.Column("action", sa.Enum("CREATE", "UPDATE", "DELETE",
-                                    name="audit_action", create_type=False), nullable=False),
+        sa.Column("action",
+                  sa.Enum("CREATE", "UPDATE", "DELETE",
+                          name="audit_action", create_type=False),
+                  nullable=False),
         sa.Column("old_value", postgresql.JSON(astext_type=sa.Text()), nullable=True),
         sa.Column("new_value", postgresql.JSON(astext_type=sa.Text()), nullable=True),
         sa.Column("user_id", postgresql.UUID(as_uuid=True),
@@ -318,9 +300,11 @@ def upgrade() -> None:
         sa.Column("actor_id", postgresql.UUID(as_uuid=True),
                   sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
         sa.Column("actor_name", sa.String(64), nullable=True),
-        sa.Column("action", sa.Enum("USER_PROVISION", "USER_UPDATE", "USER_DELETE",
-                                    "USER_ACTIVATE", "USER_DEACTIVATE", "USER_PASSWORD_RESET",
-                                    name="admin_action_type", create_type=False), nullable=False),
+        sa.Column("action",
+                  sa.Enum("USER_PROVISION", "USER_UPDATE", "USER_DELETE",
+                          "USER_ACTIVATE", "USER_DEACTIVATE", "USER_PASSWORD_RESET",
+                          name="admin_action_type", create_type=False),
+                  nullable=False),
         sa.Column("target_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("target_name", sa.String(64), nullable=True),
         sa.Column("detail", postgresql.JSON(astext_type=sa.Text()), nullable=True),
@@ -359,8 +343,9 @@ def downgrade() -> None:
     op.drop_table("business_units")
     op.drop_table("auth_logs")
     op.drop_table("users")
-    op.execute("DROP TYPE IF EXISTS admin_action_type")
-    op.execute("DROP TYPE IF EXISTS audit_action")
-    op.execute("DROP TYPE IF EXISTS team_status")
-    op.execute("DROP TYPE IF EXISTS family_status")
-    op.execute("DROP TYPE IF EXISTS auth_event_type")
+    conn = op.get_bind()
+    admin_action_type.drop(conn, checkfirst=True)
+    audit_action.drop(conn, checkfirst=True)
+    team_status.drop(conn, checkfirst=True)
+    family_status.drop(conn, checkfirst=True)
+    auth_event_type.drop(conn, checkfirst=True)
