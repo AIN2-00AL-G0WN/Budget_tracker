@@ -98,5 +98,13 @@ async def delete_business_unit(
     if not bu:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business Unit not found")
 
+    from app.crud import crud_family
+    active_families = await crud_family.count_active_families(db, business_unit_id=bu_id)
+    if active_families > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete business unit: {active_families} family(ies) are still present."
+        )
+
     await crud_business_unit.delete_business_unit(db, bu)
     return Response(status_code=204)

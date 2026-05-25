@@ -35,10 +35,15 @@ from app.schemas.schemas import (
     NotificationMarkRead,
     NotificationOut,
     PaginatedResponse,
+    GoalSeekRequest,
+    GoalSeekResponse,
+    MultiGoalSeekRequest,
+    MultiGoalSeekResponse,
 )
 from app.api.dependencies.filters import BudgetFilterParams, get_budget_filters
 from app.services.calculation_service import compute_and_get_budget_fields
 from app.services import export_service
+from app.services.goal_seek_service import solve_goal_seek, solve_multi_goal_seek
 
 router = APIRouter(tags=["budgets"])
 logger = logging.getLogger(__name__)
@@ -320,6 +325,70 @@ async def get_budget(
     if not budget:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
     return budget  # type: ignore[return-value]
+
+
+@router.post("/budgets/{budget_id}/goal-seek", response_model=GoalSeekResponse)
+async def goal_seek_budget(
+    budget_id: uuid.UUID,
+    payload: GoalSeekRequest,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Goal-Seek Solver: finds knob updates to hit a target_value on target_field,
+    quantifying the side-effects of each proposal.
+    """
+    budget = await crud_budget.get_budget_by_id(db, budget_id)
+    if not budget:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
+
+    try:
+        results = await solve_goal_seek(
+            db=db,
+            budget=budget,
+            target_field=payload.target_field,
+            target_value=payload.target_value,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    return results
+
+
+@router.post("/budgets/{budget_id}/multi-goal-seek", response_model=MultiGoalSeekResponse)
+async def multi_goal_seek_budget(
+    budget_id: uuid.UUID,
+    payload: MultiGoalSeekRequest,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Multi-Target Goal-Seek: finds optimal compromise settings to hit multiple output
+    targets simultaneously using a numerical optimizer (SciPy SLSQP).
+    """
+    budget = await crud_budget.get_budget_by_id(db, budget_id)
+    if not budget:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
+
+    try:
+        results = await solve_multi_goal_seek(
+            db=db,
+            budget=budget,
+            targets=payload.targets,
+            adjustable_knobs=payload.adjustable_knobs,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    return results
+
+
 
 
 @router.patch("/budgets/{budget_id}", response_model=BudgetOut)

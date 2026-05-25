@@ -777,3 +777,56 @@ class AuthLogOut(_Base):
     ip_address: Optional[str]
     timestamp: datetime
 
+
+# ===========================================================================
+# Goal Seek schemas
+# ===========================================================================
+
+class GoalSeekRequest(BaseModel):
+    target_field: str = Field(..., description="The calculated budget field to target (e.g., 'automation_hc_cost', 'total_budget')")
+    target_value: float = Field(..., gt=0, description="The desired target numeric value")
+
+
+class GoalSeekAction(BaseModel):
+    parameter: str = Field(..., description="The name of the parameter/knob that was adjusted (e.g., 'tc_count', 'automation_hourly_rate_override')")
+    current_value: float = Field(..., description="The current baseline value of this parameter")
+    new_value: float = Field(..., description="The newly solved value of this parameter to hit the target")
+
+
+class GoalSeekSuggestion(BaseModel):
+    rank: int = Field(..., description="Rank of suggestion (lower rank is better / has fewer side effects)")
+    name: str = Field(..., description="Friendly name of this suggestion")
+    description: str = Field(..., description="Friendly description of what this change does")
+    proposed_action: GoalSeekAction = Field(..., description="The primary change action proposed")
+    impact: dict[str, str] = Field(..., description="Detailed string diff description of fields affected")
+    side_effects_count: int = Field(..., description="Number of other calculated fields affected by this change")
+
+
+class GoalSeekResponse(BaseModel):
+    target_field: str
+    target_value: float
+    current_value: float
+    suggestions: list[GoalSeekSuggestion]
+    warning: Optional[str] = None
+
+
+# ===========================================================================
+# Multi-Target Goal Seek schemas
+# ===========================================================================
+
+class MultiGoalSeekRequest(BaseModel):
+    targets: dict[str, float] = Field(..., description="Mapping of target fields (calculated budget columns) to desired target values")
+    adjustable_knobs: Optional[list[str]] = Field(
+        default=None,
+        description="Optional list of parameter override names the solver is allowed to tweak. Defaults to all adjustable knobs if omitted."
+    )
+
+
+class MultiGoalSeekResponse(BaseModel):
+    targets: dict[str, float] = Field(..., description="The user's original target outputs")
+    resulting_values: dict[str, float] = Field(..., description="The calculated values after solving")
+    adjustments: dict[str, float] = Field(..., description="The solved parameter values")
+    warning: Optional[str] = Field(default=None, description="Populated if the solver found a compromise rather than an exact match")
+
+
+

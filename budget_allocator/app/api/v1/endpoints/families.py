@@ -87,6 +87,14 @@ async def delete_family(
     family = await crud_family.get_family_by_id(db, family_id)
     if not family:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Family not found")
+
+    active_teams = await crud_family.count_active_teams(db, family_id=family_id)
+    if active_teams > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete family: {active_teams} team(s) are still present."
+        )
+
     await crud_family.delete_family(db, family)
     return Response(status_code=204)
 

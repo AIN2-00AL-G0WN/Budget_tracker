@@ -111,6 +111,14 @@ async def delete_run(
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
+    from app.crud import crud_budget
+    active_budgets = await crud_budget.count_active_budgets(db, run_id=run_id)
+    if active_budgets > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete run: {active_budgets} active budget(s) still present. Close or delete them first."
+        )
+
     current_change_reason.set(reason)
     await crud_run.delete_run(db, run)
     return Response(status_code=204)
